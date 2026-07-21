@@ -9,6 +9,9 @@ let selectedBlockIndex = 1;
 let editHistory = [];
 let historyIndex = -1;
 let suppressDeleteConfirmation = false;
+let newDialogueCharacterId = '';
+let savedTextRange = null;
+let savedTextBlockIndex = null;
 
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('show'), 2400); }
 function setSaveStatus(status, time = '') { document.getElementById('saveStatus').textContent = status; document.getElementById('saveTime').textContent = time; }
@@ -113,7 +116,8 @@ function captureBlocks() {
     if (block.classList.contains('segment-block')) return { type: 'segment', title: block.querySelector('.segment-title')?.textContent.trim() || '未命名分段', perspectiveCharacterId: block.dataset.perspectiveCharacterId || null };
     if (block.classList.contains('narration')) return { type: 'narration', text: block.querySelector('.block-content p')?.textContent.trim() || '' };
     if (block.classList.contains('choice-block')) return { type: 'choice', title: block.querySelector('.choice-title')?.textContent.trim() || '', options: [...block.querySelectorAll('.choices button')].map((item) => item.querySelector('.choice-text')?.textContent.trim() || '') };
-    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '未命名角色', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#f2674f', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: block.querySelector('.block-content p')?.textContent.trim() || '', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
+    const paragraph = block.querySelector('.block-content p');
+    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '未命名角色', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#f2674f', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: paragraph?.textContent.trim() || '', textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
   });
 }
 function requestDeleteConfirmation(message) {
@@ -135,6 +139,30 @@ function requestDeleteConfirmation(message) {
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(false); });
     document.body.appendChild(overlay);
   });
+}
+function sanitizeRichTextHtml(html) {
+  const source = document.createElement('template');
+  const output = document.createElement('div');
+  source.innerHTML = String(html || '');
+  const allowedTags = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'SPAN', 'FONT', 'BR']);
+  const copySafeNode = (sourceNode, targetParent) => {
+    if (sourceNode.nodeType === Node.TEXT_NODE) { targetParent.appendChild(document.createTextNode(sourceNode.textContent)); return; }
+    if (sourceNode.nodeType !== Node.ELEMENT_NODE || ['SCRIPT', 'STYLE'].includes(sourceNode.tagName)) return;
+    if (!allowedTags.has(sourceNode.tagName)) { [...sourceNode.childNodes].forEach((child) => copySafeNode(child, targetParent)); return; }
+    if (sourceNode.tagName === 'BR') { targetParent.appendChild(document.createElement('br')); return; }
+    const tagName = sourceNode.tagName === 'FONT' ? 'span' : sourceNode.tagName.toLowerCase();
+    const safeNode = document.createElement(tagName);
+    ['color', 'fontWeight', 'fontStyle', 'textDecoration', 'fontSize'].forEach((property) => { if (sourceNode.style?.[property]) safeNode.style[property] = sourceNode.style[property]; });
+    if (sourceNode.tagName === 'FONT') {
+      if (sourceNode.color) safeNode.style.color = sourceNode.color;
+      const sizeMap = { '1': '11px', '2': '13px', '3': '16px', '4': '18px', '5': '22px', '6': '28px', '7': '36px' };
+      if (sizeMap[sourceNode.size]) safeNode.style.fontSize = sizeMap[sourceNode.size];
+    }
+    [...sourceNode.childNodes].forEach((child) => copySafeNode(child, safeNode));
+    targetParent.appendChild(safeNode);
+  };
+  [...source.content.childNodes].forEach((child) => copySafeNode(child, output));
+  return output.innerHTML;
 }
 function syncCurrentScene() { const scene = currentScene(); if (scene) scene.blocks = captureBlocks(); }
 function captureProject() { syncCurrentScene(); const data = desktopState.data; data.title = document.getElementById('workspaceTitle').textContent.trim(); data.chapters[0] && (data.chapters[0].title = data.chapters[0].title || '第一章'); return data; }
@@ -175,7 +203,9 @@ function createBlockElement(block, index) {
     if (isPerspective) wrapper.classList.add('pov-dialogue');
     const thumb = addChild(wrapper, 'div', 'character-thumb', (block.character || '未').slice(0, 1)); thumb.style.background = block.characterColor || character?.color || '#f2674f';
     const meta = addChild(content, 'div', 'dialogue-meta'); const nameNode = addChild(meta, 'span', 'character-name', block.character); nameNode.style.color = block.characterColor || character?.color || '#f2674f'; if (isPerspective) addChild(meta, 'span', 'pov-pill', '主视角'); (block.statusTags || []).forEach((statusTag) => addChild(meta, 'span', 'status-pill', statusTag)); addChild(meta, 'span', 'voice-pill', `♪ ${block.voice || '未设定'}`);
-    addChild(content, 'p', '', block.text);
+    const paragraph = addChild(content, 'p');
+    if (block.textHtml) paragraph.innerHTML = sanitizeRichTextHtml(block.textHtml); else paragraph.textContent = block.text || '';
+    paragraph.style.textAlign = block.textAlign || 'left';
     if (block.note) addChild(content, 'div', 'block-note', `注：${block.note}`);
     if (block.portrait) wrapper.dataset.portrait = block.portrait; if (block.portraitPreset) wrapper.dataset.portraitPreset = block.portraitPreset; if (block.characterId || character?.id) wrapper.dataset.characterId = block.characterId || character.id; wrapper.dataset.characterColor = block.characterColor || character?.color || '#f2674f';
     void thumb;
@@ -249,19 +279,14 @@ function renderImportedAssets() {
 }
 function bindAsset(asset, mode) { syncCurrentScene(); const scene = currentScene(); if (mode === 'background') { scene.background = asset.relativePath; showToast(`已将「${asset.name}」设为场景背景`); } else { const block = scene.blocks[selectedBlockIndex]; if (!block || block.type !== 'dialogue') { showToast('请先选择一条对白'); return; } block.portrait = asset.relativePath; document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"]`)?.setAttribute('data-portrait', asset.relativePath); showToast(`已将「${asset.name}」绑定到当前对白`); } markDirty(); }
 
-function renderDialogueCharacterOptions() {
-  const select = document.getElementById('dialogueCharacterSelect');
+function syncDialogueCreationState() {
   const addButton = document.getElementById('addDialogue');
-  if (!select || !addButton) return;
-  const previousValue = select.value;
-  select.replaceChildren();
-  const placeholder = addChild(select, 'option', '', '选择角色后添加对白'); placeholder.value = '';
-  (desktopState.data?.characters || []).forEach((character) => { const option = addChild(select, 'option', '', character.name); option.value = character.id; });
-  if ([...select.options].some((option) => option.value === previousValue)) select.value = previousValue;
-  select.disabled = !(desktopState.data?.characters || []).length;
-  addButton.disabled = !select.value;
+  if (!addButton) return;
+  const characters = desktopState.data?.characters || [];
+  if (!characters.some((character) => character.id === newDialogueCharacterId)) newDialogueCharacterId = '';
+  addButton.disabled = !newDialogueCharacterId;
 }
-function applyProject(data, filePath = null) { desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; document.getElementById('workspaceTitle').textContent = data.title; renderDialogueCharacterOptions(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setSaveStatus(filePath ? '已打开本地项目' : '本地新项目', filePath ? '刚刚' : '未保存'); }
+function applyProject(data, filePath = null) { desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; document.getElementById('workspaceTitle').textContent = data.title; syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setSaveStatus(filePath ? '已打开本地项目' : '本地新项目', filePath ? '刚刚' : '未保存'); }
 async function saveProject() { if (!desktopApi) return false; try { const result = await desktopApi.saveProject({ filePath: desktopState.filePath, data: captureProject() }); if (!result) return false; desktopState.filePath = result.filePath; desktopState.data = result.data; rememberProject(result.filePath, result.data.title); desktopState.dirty = false; desktopApi.setDirty(false); localStorage.removeItem('scriptroom-draft'); setSaveStatus('已保存到本地', new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); showToast('项目已保存'); return true; } catch (error) { showToast(error.message || '保存失败'); return false; } }
 async function openProject() { if (desktopState.dirty && !(await requestConfirmation('当前项目有未保存修改，确定打开另一个项目吗？'))) return; try { const result = await desktopApi.openProject(); if (result) { applyProject(result.data, result.filePath); showToast('项目已打开'); } } catch (error) { showToast(error.message || '打开失败'); } }
 async function newProject() { if (desktopState.dirty && !(await requestConfirmation('当前项目有未保存修改，确定新建项目吗？'))) return; const result = await desktopApi.newProject(); applyProject(result.data); showToast('已新建空白项目'); }
@@ -292,90 +317,137 @@ function updatePreview() {
 }
 
 navItems.forEach((item) => item.addEventListener('click', () => { const target = item.dataset.view; navItems.forEach((nav) => nav.classList.toggle('active', nav === item)); document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor'); views.characters.classList.toggle('hidden', target !== 'characters'); views.assets.classList.toggle('hidden', target !== 'assets'); document.querySelector('.breadcrumb span').textContent = target === 'characters' ? '角色与立绘' : target === 'assets' ? '素材库' : '剧本编辑器'; if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets(); }));
-document.addEventListener('click', (event) => { const block = event.target.closest('.script-block'); if (block) { selectedBlockIndex = Number(block.dataset.blockIndex || 0); document.querySelectorAll('.script-block').forEach((item) => item.classList.toggle('selected', item === block)); renderInspector(); } if (event.target.closest('#addDialogue')) { syncCurrentScene(); const characterId = document.getElementById('dialogueCharacterSelect')?.value; const character = desktopState.data.characters?.find((item) => item.id === characterId); if (!character) { showToast('请先选择一个角色'); return; } currentScene().blocks.push({ type: 'dialogue', character: character.name, characterId: character.id, characterKey: 'mei', characterColor: character.color || '#f2674f', portraitPreset: character.portraitPreset || null, statusTags: [], voice: '', text: '' }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] p`)?.focus(); markDirty(); showToast('已添加一条对白'); } if (event.target.closest('#addSegment')) { syncCurrentScene(); const segmentNumber = currentScene().blocks.filter((item) => item.type === 'segment').length + 1; currentScene().blocks.push({ type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); markDirty(); showToast('已添加分段'); } });
-document.getElementById('dialogueCharacterSelect')?.addEventListener('change', (event) => { document.getElementById('addDialogue').disabled = !event.target.value; });
-document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { editHistory = editHistory.slice(0, historyIndex + 1); editHistory.push([...document.querySelectorAll('[contenteditable="true"]')].map((item) => item.textContent)); historyIndex = editHistory.length - 1; markDirty(); } });
-document.querySelector('[title="撤销"]')?.addEventListener('click', () => { if (historyIndex > 0) { historyIndex -= 1; document.querySelectorAll('[contenteditable="true"]').forEach((item, index) => { item.textContent = editHistory[historyIndex][index] ?? item.textContent; }); markDirty(); } });
-document.querySelector('[title="重做"]')?.addEventListener('click', () => { if (historyIndex < editHistory.length - 1) { historyIndex += 1; document.querySelectorAll('[contenteditable="true"]').forEach((item, index) => { item.textContent = editHistory[historyIndex][index] ?? item.textContent; }); markDirty(); } });
+document.addEventListener('click', (event) => { const block = event.target.closest('.script-block'); if (block) { selectedBlockIndex = Number(block.dataset.blockIndex || 0); document.querySelectorAll('.script-block').forEach((item) => item.classList.toggle('selected', item === block)); renderInspector(); } if (event.target.closest('#addDialogue')) { syncCurrentScene(); const character = desktopState.data.characters?.find((item) => item.id === newDialogueCharacterId); if (!character) { showToast('请先在右侧设置新增对白角色'); return; } currentScene().blocks.push({ type: 'dialogue', character: character.name, characterId: character.id, characterKey: 'mei', characterColor: character.color || '#f2674f', portraitPreset: character.portraitPreset || null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] p`)?.focus(); markDirty(); showToast('已添加一条对白'); } if (event.target.closest('#addSegment')) { syncCurrentScene(); const segmentNumber = currentScene().blocks.filter((item) => item.type === 'segment').length + 1; currentScene().blocks.push({ type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); markDirty(); showToast('已添加分段'); } });
+document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { editHistory = editHistory.slice(0, historyIndex + 1); editHistory.push([...document.querySelectorAll('[contenteditable="true"]')].map((item) => item.innerHTML)); historyIndex = editHistory.length - 1; if (event.target.closest('.segment-title')) renderSegmentNavigator(); markDirty(); } });
+document.querySelector('[title="撤销"]')?.addEventListener('click', () => { if (historyIndex > 0) { historyIndex -= 1; document.querySelectorAll('[contenteditable="true"]').forEach((item, index) => { item.innerHTML = editHistory[historyIndex][index] ?? item.innerHTML; }); markDirty(); } });
+document.querySelector('[title="重做"]')?.addEventListener('click', () => { if (historyIndex < editHistory.length - 1) { historyIndex += 1; document.querySelectorAll('[contenteditable="true"]').forEach((item, index) => { item.innerHTML = editHistory[historyIndex][index] ?? item.innerHTML; }); markDirty(); } });
 document.getElementById('addChapter')?.addEventListener('click', () => { const chapters = desktopState.data.chapters; const chapterNumber = chapters.length + 1; chapters.push({ id: `chapter-${Date.now()}`, title: `未命名章节 ${chapterNumber}`, status: '草稿', scenes: [{ id: `scene-${Date.now()}`, number: '01', title: '未命名场景', blocks: [] }] }); activeChapterIndex = chapters.length - 1; activeSceneIndex = 0; renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]').click(); markDirty(); showToast('已添加新章节'); });
 document.getElementById('newProjectBtn')?.addEventListener('click', newProject); document.getElementById('openProjectBtn')?.addEventListener('click', openProject); document.getElementById('saveProjectBtn')?.addEventListener('click', saveProject); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
 document.getElementById('previewBtn')?.addEventListener('click', () => { updatePreview(); document.getElementById('previewModal').classList.remove('hidden'); }); document.getElementById('closePreview')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden')); document.querySelector('.modal-backdrop')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden'));
 document.addEventListener('keydown', (event) => { if (!(event.ctrlKey || event.metaKey)) return; const key = event.key.toLowerCase(); if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } });
 desktopApi?.onBeforeClose(async () => { const saved = await saveProject(); if (saved) desktopApi.finishClose(); else desktopApi.cancelClose(); });
 setInterval(() => { if (desktopState.dirty && desktopState.data) localStorage.setItem('scriptroom-draft', JSON.stringify({ filePath: desktopState.filePath, data: captureProject(), savedAt: Date.now() })); }, 10000);
-if (desktopApi) desktopApi.newProject().then(async (result) => { const draft = localStorage.getItem('scriptroom-draft'); if (draft && await requestConfirmation('发现上次未保存的临时草稿，是否恢复？')) { const recovered = JSON.parse(draft); applyProject(recovered.data, recovered.filePath); markDirty(); } else { applyProject(result.data); } editHistory = [[...document.querySelectorAll('[contenteditable="true"]')].map((item) => item.textContent)]; historyIndex = 0; });
+if (desktopApi) desktopApi.newProject().then(async (result) => { const draft = localStorage.getItem('scriptroom-draft'); if (draft && await requestConfirmation('发现上次未保存的临时草稿，是否恢复？')) { const recovered = JSON.parse(draft); applyProject(recovered.data, recovered.filePath); markDirty(); } else { applyProject(result.data); } editHistory = [[...document.querySelectorAll('[contenteditable="true"]')].map((item) => item.innerHTML)]; historyIndex = 0; });
 
 // Interactive editor layer: characters, inspector controls, drag sorting and project switcher.
 let draggedBlockIndex = null;
 function activeDialogueBlock() { const scene = currentScene(); const block = scene?.blocks?.[selectedBlockIndex]; return block?.type === 'dialogue' ? block : null; }
+function createInspectorSection(body, title, description = '') {
+  const section = addChild(body, 'section', 'inspector-section');
+  addChild(section, 'h3', '', title);
+  if (description) addChild(section, 'p', 'inspector-section-description', description);
+  return section;
+}
+function renderDialogueCreationSettings(body) {
+  const section = createInspectorSection(body, '新增对白设置', '先选择角色，再使用对白流底部的“添加对白”。');
+  const characters = desktopState.data?.characters || [];
+  const group = addChild(section, 'div', 'property-group'); addChild(group, 'label', '', '新增对白角色');
+  const select = addChild(group, 'select', 'select-control editor-select');
+  const placeholder = addChild(select, 'option', '', characters.length ? '请选择角色' : '暂无角色，请先创建'); placeholder.value = ''; placeholder.disabled = !characters.length;
+  characters.forEach((character) => { const option = addChild(select, 'option', '', character.name); option.value = character.id; option.selected = newDialogueCharacterId === character.id; });
+  select.disabled = !characters.length;
+  select.addEventListener('change', () => { newDialogueCharacterId = select.value; syncDialogueCreationState(); });
+  syncDialogueCreationState();
+}
+function selectedDialogueParagraph() { return document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .block-content p[contenteditable="true"]`); }
+function rememberTextSelection() {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) return;
+  const range = selection.getRangeAt(0);
+  const container = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+  const paragraph = container?.closest?.('.script-block.dialogue .block-content p[contenteditable="true"]');
+  if (!paragraph) return;
+  savedTextRange = range.cloneRange();
+  savedTextBlockIndex = Number(paragraph.closest('.script-block').dataset.blockIndex);
+}
+function restoreTextSelection(paragraph) {
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  if (savedTextRange && savedTextBlockIndex === selectedBlockIndex && (paragraph === savedTextRange.commonAncestorContainer || paragraph.contains(savedTextRange.commonAncestorContainer))) selection.addRange(savedTextRange);
+  else { const range = document.createRange(); range.selectNodeContents(paragraph); selection.addRange(range); }
+}
+function applyInlineTextFormat(command, value = null) {
+  const block = activeDialogueBlock(); const paragraph = selectedDialogueParagraph();
+  if (!block || !paragraph) return;
+  paragraph.focus(); restoreTextSelection(paragraph);
+  document.execCommand(command, false, value);
+  block.text = paragraph.textContent;
+  block.textHtml = sanitizeRichTextHtml(paragraph.innerHTML);
+  rememberTextSelection();
+  markDirty();
+}
+function applyParagraphAlignment(alignment) {
+  const block = activeDialogueBlock(); const paragraph = selectedDialogueParagraph();
+  if (!block || !paragraph) return;
+  block.textAlign = alignment;
+  paragraph.style.textAlign = alignment;
+  markDirty();
+}
+function renderTextFormattingSettings(body, block) {
+  const section = createInspectorSection(body, '文字编辑器', '选中对白文字后设置格式；未选中文字时会应用到整条对白。');
+  if (!block) { section.classList.add('disabled'); addChild(section, 'div', 'inspector-empty compact', '请选择一条对白后使用文字格式。'); return; }
+  const toolbar = addChild(section, 'div', 'text-format-toolbar');
+  const addCommandButton = (label, title, command) => { const button = addChild(toolbar, 'button', 'text-format-button', label); button.type = 'button'; button.title = title; button.addEventListener('mousedown', (event) => event.preventDefault()); button.addEventListener('click', () => applyInlineTextFormat(command)); return button; };
+  addCommandButton('B', '加粗', 'bold').classList.add('bold');
+  addCommandButton('I', '斜体', 'italic').classList.add('italic');
+  addCommandButton('U', '下划线', 'underline').classList.add('underline');
+  addCommandButton('S', '删除线', 'strikeThrough').classList.add('strike');
+  const sizeSelect = addChild(toolbar, 'select', 'text-format-select');
+  [['3', '正常'], ['4', '较大'], ['5', '大字'], ['6', '标题']].forEach(([value, label]) => { const option = addChild(sizeSelect, 'option', '', label); option.value = value; });
+  sizeSelect.addEventListener('change', () => { applyInlineTextFormat('fontSize', sizeSelect.value); sizeSelect.value = '3'; });
+  const colorLabel = addChild(toolbar, 'label', 'text-color-control'); addChild(colorLabel, 'span', '', 'A');
+  const colorInput = addChild(colorLabel, 'input'); colorInput.type = 'color'; colorInput.value = '#2d302f'; colorInput.title = '文字颜色'; colorInput.addEventListener('input', () => applyInlineTextFormat('foreColor', colorInput.value));
+  const alignment = addChild(section, 'div', 'text-alignment-row');
+  [['left', '左对齐'], ['center', '居中'], ['right', '右对齐']].forEach(([value, title]) => { const button = addChild(alignment, 'button', `text-align-button${(block.textAlign || 'left') === value ? ' active' : ''}`, value === 'left' ? '≡' : value === 'center' ? '≣' : '≡'); button.type = 'button'; button.title = title; if (value === 'right') button.classList.add('align-right-icon'); button.addEventListener('click', () => { applyParagraphAlignment(value); renderInspector(); }); });
+  const clear = addChild(alignment, 'button', 'text-clear-button', '清除格式'); clear.type = 'button'; clear.addEventListener('mousedown', (event) => event.preventDefault()); clear.addEventListener('click', () => applyInlineTextFormat('removeFormat'));
+}
+document.addEventListener('selectionchange', rememberTextSelection);
 function renderInspector() {
   const body = document.querySelector('.inspector-body'); if (!body) return; body.replaceChildren();
   const header = document.querySelector('.inspector-header span');
   const selectedBlock = currentScene()?.blocks?.[selectedBlockIndex];
+  let dialogueBlock = null;
   if (selectedBlock?.type === 'segment') {
     if (header) header.textContent = '分段属性';
-    const titleGroup = addChild(body, 'div', 'property-group'); addChild(titleGroup, 'label', '', '分段名称');
+    const properties = createInspectorSection(body, '当前分段');
+    const titleGroup = addChild(properties, 'div', 'property-group'); addChild(titleGroup, 'label', '', '分段名称');
     const titleInput = addChild(titleGroup, 'input', 'select-control editor-input'); titleInput.value = selectedBlock.title || ''; titleInput.placeholder = '输入分段名称';
-    titleInput.addEventListener('input', () => { selectedBlock.title = titleInput.value; document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .segment-title`)?.replaceChildren(document.createTextNode(titleInput.value || '未命名分段')); markDirty(); });
-    const perspectiveGroup = addChild(body, 'div', 'property-group'); addChild(perspectiveGroup, 'label', '', '主视角角色');
+    titleInput.addEventListener('input', () => { selectedBlock.title = titleInput.value; document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .segment-title`)?.replaceChildren(document.createTextNode(titleInput.value || '未命名分段')); renderSegmentNavigator(); markDirty(); });
+    const perspectiveGroup = addChild(properties, 'div', 'property-group'); addChild(perspectiveGroup, 'label', '', '主视角角色');
     const perspectiveSelect = addChild(perspectiveGroup, 'select', 'select-control editor-select');
     const none = addChild(perspectiveSelect, 'option', '', '不设置主视角'); none.value = '';
     (desktopState.data.characters || []).forEach((character) => { const option = addChild(perspectiveSelect, 'option', '', character.name); option.value = character.id; option.selected = selectedBlock.perspectiveCharacterId === character.id; });
     perspectiveSelect.addEventListener('change', () => { selectedBlock.perspectiveCharacterId = perspectiveSelect.value || null; renderScene(); markDirty(); });
-    return;
+  } else {
+    if (header) header.textContent = '对白属性';
+    dialogueBlock = activeDialogueBlock();
+    const properties = createInspectorSection(body, '当前对白');
+    if (!dialogueBlock) addChild(properties, 'div', 'inspector-empty compact', '选择一条对白后，可编辑角色、状态标签和立绘属性。');
+    else {
+      const characters = desktopState.data.characters || [];
+      const characterGroup = addChild(properties, 'div', 'property-group'); addChild(characterGroup, 'label', '', '当前角色');
+      const characterSelect = addChild(characterGroup, 'select', 'select-control editor-select');
+      characters.forEach((character) => { const option = addChild(characterSelect, 'option', '', character.name); option.value = character.id; if (character.name === dialogueBlock.character) option.selected = true; });
+      if (!characters.length) { const option = addChild(characterSelect, 'option', '', '暂无角色，请先创建'); option.disabled = true; }
+      characterSelect.addEventListener('change', () => { const character = characters.find((item) => item.id === characterSelect.value); if (!character) return; applyCharacterToBlock(character, dialogueBlock); renderScene(); markDirty(); });
+      const statusGroup = addChild(properties, 'div', 'property-group'); addChild(statusGroup, 'label', '', '状态标签');
+      const statusEditor = addChild(statusGroup, 'div', 'status-tag-editor');
+      (dialogueBlock.statusTags || []).forEach((statusTag, tagIndex) => { const chip = addChild(statusEditor, 'span', 'status-tag-chip'); addChild(chip, 'span', '', statusTag); const removeTag = addChild(chip, 'button', '', '×'); removeTag.type = 'button'; removeTag.title = '删除标签'; removeTag.addEventListener('click', () => { dialogueBlock.statusTags.splice(tagIndex, 1); renderScene(); markDirty(); }); });
+      const statusInput = addChild(statusEditor, 'input', 'status-tag-input'); statusInput.placeholder = '输入后按回车或点击其他位置';
+      const commitStatusTag = (refocus) => { const value = statusInput.value.trim(); if (!value) return; dialogueBlock.statusTags ||= []; if (dialogueBlock.statusTags.includes(value)) { statusInput.value = ''; return; } dialogueBlock.statusTags.push(value); renderScene(); markDirty(); if (refocus) requestAnimationFrame(() => document.querySelector('.status-tag-input')?.focus()); };
+      statusInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); commitStatusTag(true); } }); statusInput.addEventListener('blur', () => setTimeout(() => commitStatusTag(false), 0));
+      const voiceGroup = addChild(properties, 'div', 'property-group'); addChild(voiceGroup, 'label', '', '语音提示'); const voiceSelect = addChild(voiceGroup, 'select', 'select-control editor-select'); ['女声 · 轻', '女声 · 强', '男声 · 低', '男声 · 清晰', '无语音'].forEach((voice) => { const option = addChild(voiceSelect, 'option', '', voice); option.value = voice; option.selected = dialogueBlock.voice === voice; }); voiceSelect.addEventListener('change', () => { dialogueBlock.voice = voiceSelect.value; renderScene(); markDirty(); });
+      const assetGroup = addChild(properties, 'div', 'property-group'); addChild(assetGroup, 'label', '', '当前立绘'); const assetSelect = addChild(assetGroup, 'select', 'select-control editor-select');
+      const none = addChild(assetSelect, 'option', '', '不使用立绘'); none.value = 'none'; none.selected = !dialogueBlock.portrait && !dialogueBlock.portraitPreset;
+      const selectedCharacter = characters.find((item) => item.name === dialogueBlock.character);
+      if (selectedCharacter?.portraitPreset) { const preset = addChild(assetSelect, 'option', '', '角色默认立绘'); preset.value = `preset:${selectedCharacter.portraitPreset}`; preset.selected = !dialogueBlock.portrait && dialogueBlock.portraitPreset === selectedCharacter.portraitPreset; }
+      (desktopState.data.assets || []).filter((asset) => !['mp3', 'wav', 'ogg'].includes(asset.type)).forEach((asset) => { const option = addChild(assetSelect, 'option', '', asset.name); option.value = `asset:${asset.relativePath}`; option.selected = dialogueBlock.portrait === asset.relativePath; });
+      assetSelect.addEventListener('change', () => { if (assetSelect.value.startsWith('asset:')) { dialogueBlock.portrait = assetSelect.value.slice(6); dialogueBlock.portraitPreset = null; } else if (assetSelect.value.startsWith('preset:')) { dialogueBlock.portrait = undefined; dialogueBlock.portraitPreset = assetSelect.value.slice(7); } else { dialogueBlock.portrait = undefined; dialogueBlock.portraitPreset = null; } renderScene(); markDirty(); });
+      const noteGroup = addChild(properties, 'div', 'property-group'); addChild(noteGroup, 'label', '', '创作备注'); const note = addChild(noteGroup, 'textarea', '', dialogueBlock.note || ''); note.placeholder = '给自己留下一句创作提示…'; note.addEventListener('input', () => { dialogueBlock.note = note.value; markDirty(); });
+    }
   }
-  if (header) header.textContent = '对白属性';
-  const block = activeDialogueBlock();
-  if (!block) { addChild(body, 'div', 'inspector-empty', '选择一条对白后，可编辑角色、状态标签和立绘属性。'); return; }
-  const characters = desktopState.data.characters || [];
-  const characterGroup = addChild(body, 'div', 'property-group'); addChild(characterGroup, 'label', '', '当前角色');
-  const characterSelect = addChild(characterGroup, 'select', 'select-control editor-select');
-  characters.forEach((character) => { const option = addChild(characterSelect, 'option', '', character.name); option.value = character.id; if (character.name === block.character) option.selected = true; });
-  if (!characters.length) { const option = addChild(characterSelect, 'option', '', '暂无角色，请先创建'); option.disabled = true; }
-  characterSelect.addEventListener('change', () => { const character = characters.find((item) => item.id === characterSelect.value); if (!character) return; applyCharacterToBlock(character, block); renderScene(); renderInspector(); markDirty(); });
-  const statusGroup = addChild(body, 'div', 'property-group'); addChild(statusGroup, 'label', '', '状态标签');
-  const statusEditor = addChild(statusGroup, 'div', 'status-tag-editor');
-  (block.statusTags || []).forEach((statusTag, tagIndex) => {
-    const chip = addChild(statusEditor, 'span', 'status-tag-chip'); addChild(chip, 'span', '', statusTag);
-    const removeTag = addChild(chip, 'button', '', '×'); removeTag.type = 'button'; removeTag.title = '删除标签';
-    removeTag.addEventListener('click', () => { block.statusTags.splice(tagIndex, 1); renderScene(); markDirty(); });
-  });
-  const statusInput = addChild(statusEditor, 'input', 'status-tag-input'); statusInput.placeholder = '输入后按回车或点击其他位置';
-  const commitStatusTag = (refocus) => {
-    const value = statusInput.value.trim();
-    if (!value) return;
-    block.statusTags ||= [];
-    if (block.statusTags.includes(value)) { statusInput.value = ''; return; }
-    block.statusTags.push(value);
-    renderScene();
-    markDirty();
-    if (refocus) requestAnimationFrame(() => document.querySelector('.status-tag-input')?.focus());
-  };
-  statusInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); commitStatusTag(true); } });
-  statusInput.addEventListener('blur', () => setTimeout(() => commitStatusTag(false), 0));
-  const voiceGroup = addChild(body, 'div', 'property-group'); addChild(voiceGroup, 'label', '', '语音提示'); const voiceSelect = addChild(voiceGroup, 'select', 'select-control editor-select'); ['女声 · 轻', '女声 · 强', '男声 · 低', '男声 · 清晰', '无语音'].forEach((voice) => { const option = addChild(voiceSelect, 'option', '', voice); option.value = voice; option.selected = block.voice === voice; }); voiceSelect.addEventListener('change', () => { block.voice = voiceSelect.value; renderScene(); renderInspector(); markDirty(); });
-  const assetGroup = addChild(body, 'div', 'property-group');
-  addChild(assetGroup, 'label', '', '当前立绘');
-  const assetSelect = addChild(assetGroup, 'select', 'select-control editor-select');
-  const none = addChild(assetSelect, 'option', '', '不使用立绘'); none.value = 'none'; none.selected = !block.portrait && !block.portraitPreset;
-  const selectedCharacter = characters.find((item) => item.name === block.character);
-  if (selectedCharacter?.portraitPreset) {
-    const preset = addChild(assetSelect, 'option', '', '角色默认立绘');
-    preset.value = `preset:${selectedCharacter.portraitPreset}`;
-    preset.selected = !block.portrait && block.portraitPreset === selectedCharacter.portraitPreset;
-  }
-  (desktopState.data.assets || []).filter((asset) => !['mp3', 'wav', 'ogg'].includes(asset.type)).forEach((asset) => {
-    const option = addChild(assetSelect, 'option', '', asset.name);
-    option.value = `asset:${asset.relativePath}`;
-    option.selected = block.portrait === asset.relativePath;
-  });
-  assetSelect.addEventListener('change', () => {
-    if (assetSelect.value.startsWith('asset:')) { block.portrait = assetSelect.value.slice(6); block.portraitPreset = null; }
-    else if (assetSelect.value.startsWith('preset:')) { block.portrait = undefined; block.portraitPreset = assetSelect.value.slice(7); }
-    else { block.portrait = undefined; block.portraitPreset = null; }
-    renderScene(); markDirty();
-  });
-  const noteGroup = addChild(body, 'div', 'property-group'); addChild(noteGroup, 'label', '', '创作备注'); const note = addChild(noteGroup, 'textarea', '', block.note || ''); note.placeholder = '给自己留下一句创作提示…'; note.addEventListener('input', () => { block.note = note.value; markDirty(); });
+  renderDialogueCreationSettings(body);
+  renderTextFormattingSettings(body, dialogueBlock);
 }
 function applyCharacterToBlock(character, block) {
   block.character = character.name;
@@ -401,7 +473,7 @@ function renderCharacters() {
     character.id = `character-${Date.now()}`;
     desktopState.data.characters.push(character);
     renderCharacters();
-    renderDialogueCharacterOptions();
+    syncDialogueCreationState();
     renderInspector();
     markDirty();
     showToast(`已创建角色「${character.name}」`);
@@ -428,7 +500,7 @@ function renderCharacters() {
       if (!updated) return;
       desktopState.data.characters[characterIndex] = { ...character, ...updated };
       desktopState.data.chapters.forEach((chapter) => chapter.scenes.forEach((scene) => scene.blocks.forEach((block) => { if (block.type === 'dialogue' && (block.characterId === character.id || block.character === character.name)) applyCharacterToBlock(desktopState.data.characters[characterIndex], block); })));
-      renderCharacters(); renderDialogueCharacterOptions(); renderScene(); renderInspector(); markDirty();
+      renderCharacters(); syncDialogueCreationState(); renderScene(); renderInspector(); markDirty();
     });
     use.addEventListener('click', () => {
       const block = activeDialogueBlock();
@@ -492,11 +564,41 @@ function openProjectMenu() {
 }
 const baseApplyProject = applyProject;
 applyProject = function (data, filePath = null) { baseApplyProject(data, filePath); if (filePath) rememberProject(filePath, data.title); renderCharacters(); renderInspector(); };
+function updateEditorScrollTools() {
+  const panel = document.querySelector('.script-panel'); const backToTop = document.getElementById('backToTop'); const navigator = document.getElementById('segmentNavigator');
+  if (!panel || !backToTop || !navigator) return;
+  backToTop.classList.toggle('hidden', panel.scrollTop < 320);
+  let activeMarker = null;
+  navigator.querySelectorAll('.segment-nav-marker').forEach((marker) => { if (panel.scrollTop + 120 >= Number(marker.dataset.target || 0)) activeMarker = marker; marker.classList.remove('active'); });
+  activeMarker?.classList.add('active');
+}
+function renderSegmentNavigator() {
+  requestAnimationFrame(() => {
+    const panel = document.querySelector('.script-panel'); const canvas = document.querySelector('.script-canvas'); const navigator = document.getElementById('segmentNavigator');
+    if (!panel || !canvas || !navigator) return;
+    navigator.replaceChildren();
+    const segments = [...canvas.querySelectorAll('.segment-block')];
+    navigator.classList.toggle('hidden', !segments.length);
+    if (!segments.length) { updateEditorScrollTools(); return; }
+    addChild(navigator, 'span', 'segment-axis-line');
+    const maxScroll = Math.max(1, panel.scrollHeight - panel.clientHeight);
+    segments.forEach((segment, segmentIndex) => {
+      const target = Math.max(0, segment.offsetTop + canvas.offsetTop - 24);
+      const marker = addChild(navigator, 'button', 'segment-nav-marker'); marker.type = 'button'; marker.dataset.target = String(target); marker.style.top = `${Math.min(100, target / maxScroll * 100)}%`; marker.title = segment.querySelector('.segment-title')?.textContent || `分段 ${segmentIndex + 1}`;
+      addChild(marker, 'span', 'segment-nav-dot'); addChild(marker, 'span', 'segment-nav-label', marker.title);
+      marker.addEventListener('click', () => panel.scrollTo({ top: target, behavior: 'smooth' }));
+    });
+    updateEditorScrollTools();
+  });
+}
 const baseRenderScene = renderScene;
-renderScene = function () { baseRenderScene(); document.querySelectorAll('.block-handle').forEach((handle) => { handle.draggable = true; }); renderInspector(); };
+renderScene = function () { baseRenderScene(); savedTextRange = null; savedTextBlockIndex = null; document.querySelectorAll('.block-handle').forEach((handle) => { handle.draggable = true; }); renderInspector(); renderSegmentNavigator(); };
 const baseRenderImportedAssets = renderImportedAssets;
 renderImportedAssets = function () { baseRenderImportedAssets(); };
 document.getElementById('workspaceSwitcher')?.addEventListener('click', openProjectMenu);
+document.querySelector('.script-panel')?.addEventListener('scroll', updateEditorScrollTools, { passive: true });
+document.getElementById('backToTop')?.addEventListener('click', () => document.querySelector('.script-panel')?.scrollTo({ top: 0, behavior: 'smooth' }));
+window.addEventListener('resize', renderSegmentNavigator);
 document.getElementById('windowMinimize')?.addEventListener('click', () => desktopApi?.minimize()); document.getElementById('windowMaximize')?.addEventListener('click', () => desktopApi?.toggleMaximize()); document.getElementById('windowClose')?.addEventListener('click', () => desktopApi?.closeWindow());
 async function deleteBlock(index) {
   syncCurrentScene();

@@ -43,3 +43,10 @@ test('旧情绪标签会迁移为状态标签并支持分段主视角', () => {
   assert.deepEqual(project.chapters[0].scenes[0].blocks[0].statusTags, ['紧张']);
   assert.deepEqual(project.chapters[0].scenes[0].blocks[1], { type: 'segment', title: '调查开始', perspectiveCharacterId: 'character-a' });
 });
+
+test('对白文字格式字段会被保存并校正对齐方式', () => {
+  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', text: '重点', textHtml: '<b>重点</b>', textAlign: 'center' }, { type: 'dialogue', textAlign: 'invalid' }] }] }] });
+  assert.equal(project.chapters[0].scenes[0].blocks[0].textHtml, '<b>重点</b>');
+  assert.equal(project.chapters[0].scenes[0].blocks[0].textAlign, 'center');
+  assert.equal(project.chapters[0].scenes[0].blocks[1].textAlign, 'left');
+});
