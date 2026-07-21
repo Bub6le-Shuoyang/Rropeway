@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' data:;" />
     <meta name="theme-color" content="#f8f7f4" />
     <title>Scriptroom · 游戏对话脚本工作台</title>
     <link rel="stylesheet" href="./styles.css" />
@@ -10,63 +11,46 @@
   <body><div class="window-chrome"><div class="window-drag-region"><span class="window-brand">✦ scriptroom</span></div><div class="window-controls"><button id="windowMinimize" title="最小化">−</button><button id="windowMaximize" title="最大化">□</button><button id="windowClose" title="关闭">×</button></div></div><div class="app-shell">
       <aside class="sidebar">
         <div class="brand"><span class="brand-mark">✦</span><span>scriptroom</span></div>
-        <div class="workspace-switcher" id="workspaceSwitcher"><span class="workspace-dot"></span><span id="workspaceTitle">《雾港来信》</span><span class="chevron">⌄</span></div>
+        <div class="workspace-switcher" id="workspaceSwitcher"><span class="workspace-dot"></span><span id="workspaceTitle">未命名项目</span><span class="chevron">⌄</span></div>
         <nav class="main-nav" aria-label="主导航">
           <button class="nav-item active" data-view="editor"><span>▤</span>剧本编辑器</button>
           <button class="nav-item" data-view="characters"><span>♧</span>角色与立绘</button>
           <button class="nav-item" data-view="assets"><span>▧</span>素材库</button>
         </nav>
         <div class="sidebar-section-title">章节 <button class="tiny-add" id="addChapter" title="新建章节">＋</button></div>
-        <div class="chapter-list" id="chapterList">
-          <button class="chapter active"><span class="chapter-number">01</span><span><b>潮汐之后</b><small>12 个场景 · 进行中</small></span></button>
-          <button class="chapter"><span class="chapter-number">02</span><span><b>旧灯塔</b><small>8 个场景 · 草稿</small></span></button>
-          <button class="chapter"><span class="chapter-number">03</span><span><b>回声房间</b><small>未开始</small></span></button>
-        </div>
-        <div class="sidebar-bottom">
+        <div class="chapter-list" id="chapterList"></div><div class="sidebar-bottom">
           <div class="sync-status"><span class="sync-dot"></span><span id="saveStatus">未保存</span><span class="save-time" id="saveTime">—</span></div>
-          <button class="user-card"><span class="avatar avatar-you">林</span><span><b>林编辑</b><small>本地工作区</small></span><span class="more">•••</span></button>
         </div>
       </aside>
 
       <main class="main-content">
         <header class="topbar">
-          <div class="breadcrumb"><span>剧本编辑器</span><span>/</span><strong>第一章 · 潮汐之后</strong></div>
-          <div class="top-actions"><button class="file-button" id="newProjectBtn">新建</button><button class="file-button" id="openProjectBtn">打开</button><button class="file-button save" id="saveProjectBtn">保存</button><button class="icon-button" title="搜索">⌕</button><button class="icon-button" title="快捷键">⌘</button><button class="avatar avatar-small">林</button></div>
+          <div class="breadcrumb"><span>剧本编辑器</span><span>/</span><strong>第一章 · 未命名场景</strong></div>
+          <div class="top-actions"><button class="file-button" id="newProjectBtn">新建</button><button class="file-button" id="openProjectBtn">打开</button><button class="file-button save" id="saveProjectBtn">保存</button></div>
         </header>
 
         <div class="editor-layout">
           <section class="script-panel" id="editorView">
-            <div class="script-heading"><div><div class="eyebrow">CHAPTER 01 / SCENE 04</div><h1>潮汐之后</h1><p class="muted">海风把信纸吹向码头尽头 · 最后编辑于 2 分钟前</p></div><div class="heading-actions"><button class="ghost-button">⋮</button><button class="primary-button" id="previewBtn">▶ 预览</button></div></div>
-            <div class="scene-tabs"><button class="scene-tab active">04 <span>灯塔边</span></button><button class="scene-tab">05 <span>雾中来客</span></button><button class="scene-tab">06 <span>潮声里的秘密</span></button><button class="add-scene">＋</button></div>
+            <div class="script-heading"><div><div class="eyebrow">SCRIPT EDITOR</div><h1>未命名场景</h1><p class="muted">空白场景</p></div><div class="heading-actions"><button class="primary-button" id="previewBtn">▶ 预览</button></div></div>
+            <div class="scene-tabs"></div>
             <div class="script-canvas">
-              <div class="canvas-toolbar"><span>对白流</span><button class="toolbar-control">显示时间线 <span>⌄</span></button><div class="toolbar-spacer"></div><button class="toolbar-icon" title="撤销">↶</button><button class="toolbar-icon" title="重做">↷</button></div>
+              <div class="canvas-toolbar"><span>对白流</span><div class="toolbar-spacer"></div><button class="toolbar-icon" title="撤销">↶</button><button class="toolbar-icon" title="重做">↷</button></div>
               <div class="timeline-line"></div>
-              <div class="script-block narration"><div class="block-handle">⠿</div><div class="block-content"><span class="block-type">场景描述</span><p contenteditable="true">暮色沉入海面。灯塔的光一圈圈扫过潮湿的石阶，远处传来汽笛声。</p><div class="block-tags"><span>氛围 · 安静</span><span>镜头 · 远景</span></div></div><button class="block-more">•••</button></div>
-              <div class="script-block dialogue selected"><div class="block-handle">⠿</div><div class="character-thumb mei">沈</div><div class="block-content"><div class="dialogue-meta"><span class="character-name mei-name">沈知微</span><span class="emotion-pill">克制</span><span class="voice-pill">♪ 女声 · 轻</span></div><p contenteditable="true">你还是来了。</p><div class="block-note">注：语气不要有责备，更像是早就知道他会出现。</div></div><button class="block-more">•••</button></div>
-              <div class="script-block dialogue"><div class="block-handle">⠿</div><div class="character-thumb yan">顾</div><div class="block-content"><div class="dialogue-meta"><span class="character-name yan-name">顾言川</span><span class="emotion-pill">迟疑</span><span class="voice-pill">♪ 男声 · 低</span></div><p contenteditable="true">我以为你不会再等我。</p></div><button class="block-more">•••</button></div>
-              <div class="script-block choice-block"><div class="block-handle">⠿</div><div class="choice-icon">↳</div><div class="block-content"><span class="block-type">玩家选择</span><p class="choice-title">知微会怎么回答？</p><div class="choices"><button>“我只是在等一个解释。”<span>→</span></button><button>“这里风太大了，我先走了。”<span>→</span></button></div></div><button class="block-more">•••</button></div>
-              <button class="add-block" id="addDialogue"><span>＋</span> 添加对白或旁白</button>
+              <button class="add-block" id="addDialogue"><span>＋</span> 添加对白</button>
             </div>
           </section>
 
           <aside class="inspector" id="inspector">
-            <div class="inspector-header"><span>对白属性</span><button class="ghost-button">×</button></div>
-            <div class="inspector-body">
-              <div class="property-group"><label>当前角色</label><button class="select-control"><span class="character-mini mei">沈</span><span>沈知微</span><span class="chevron">⌄</span></button></div>
-              <div class="property-group"><label>情绪标签</label><div class="tag-row"><button class="tag active">克制</button><button class="tag">温柔</button><button class="tag">惊讶</button><button class="tag add-tag">＋</button></div></div>
-              <div class="property-group"><label>立绘状态</label><div class="portrait-preview"><div class="portrait-art mei-art"><span>沈知微</span></div><div class="portrait-info"><b>沈知微 · 侧身</b><small>角色立绘 / 透明背景</small><button>更换立绘</button></div></div></div>
-              <div class="property-group"><label>语音提示</label><button class="select-control"><span class="voice-wave">◒</span><span>女声 · 轻柔</span><span class="chevron">⌄</span></button></div>
-
-            </div>
-          </aside>
+            <div class="inspector-header"><span>对白属性</span></div>
+            <div class="inspector-body"></div></aside>
         </div>
 
-        <section class="alternate-view hidden" id="charactersView"><div class="section-title"><div><div class="eyebrow">CAST &amp; ART</div><h2>角色与立绘</h2><p class="muted">统一管理角色色彩、表情和出场状态。</p></div><button class="primary-button">＋ 新建角色</button></div><div class="character-grid"><article class="character-card"><div class="large-character mei-art"><span>沈知微</span></div><div class="character-card-copy"><div><h3>沈知微</h3><p>女主角 · 港口气象记录员</p></div><span class="color-dot pink"></span></div><div class="card-foot"><span>12 个立绘</span><span>最近使用 · 2 分钟前</span></div></article><article class="character-card"><div class="large-character yan-art"><span>顾言川</span></div><div class="character-card-copy"><div><h3>顾言川</h3><p>男主角 · 远洋船员</p></div><span class="color-dot blue"></span></div><div class="card-foot"><span>8 个立绘</span><span>最近使用 · 1 小时前</span></div></article><button class="character-card add-character"><span>＋</span><b>添加角色</b><small>从角色设定开始</small></button></div></section>
-        <section class="alternate-view hidden" id="assetsView"><div class="section-title"><div><div class="eyebrow">LOCAL ASSET LIBRARY</div><h2>素材库</h2><p class="muted">所有素材只保存在当前电脑，不需要联网。</p></div><button class="primary-button" id="importAssetsBtn">＋ 导入素材</button></div><div class="asset-toolbar"><button class="asset-filter active">全部</button><button class="asset-filter">背景 <b>14</b></button><button class="asset-filter">立绘 <b>20</b></button><button class="asset-filter">音效 <b>06</b></button><div class="toolbar-spacer"></div><span class="muted">按最近使用排序　⌄</span></div><div class="asset-grid"><div class="asset-card bg-harbor"><span>背景</span><b>灯塔边 · 黄昏</b></div><div class="asset-card bg-room"><span>背景</span><b>旧旅馆房间</b></div><div class="asset-card bg-sea"><span>背景</span><b>雾海 · 远景</b></div><div class="asset-card bg-paper"><span>其他</span><b>信纸 · 米白</b></div></div></section>
+        <section class="alternate-view hidden" id="charactersView"></section>
+        <section class="alternate-view hidden" id="assetsView"><div class="section-title"><div><div class="eyebrow">LOCAL ASSET LIBRARY</div><h2>素材库</h2><p class="muted">所有素材只保存在当前电脑。</p></div><button class="primary-button" id="importAssetsBtn">＋ 导入素材</button></div><div class="asset-grid"></div></section>
       </main>
     </div>
     <div class="toast" id="toast">操作已完成</div>
-    <div class="modal hidden" id="previewModal"><div class="modal-backdrop"></div><div class="preview-window"><div class="preview-topbar"><span>▶ 剧本预览</span><button id="closePreview">×</button></div><div class="preview-stage"><div class="preview-scene"><div class="preview-character"></div><div class="preview-dialogue"><b id="previewSpeaker">沈知微</b><p id="previewText">你还是来了。</p><div class="preview-options"><button>“我只是在等一个解释。”</button><button>“这里风太大了，我先走了。”</button></div></div></div></div></div></div>
+    <div class="modal hidden" id="previewModal"><div class="modal-backdrop"></div><div class="preview-window"><div class="preview-topbar"><span>▶ 剧本预览</span><button id="closePreview">×</button></div><div class="preview-stage"><div class="preview-scene"><div class="preview-character"></div><div class="preview-dialogue"><b id="previewSpeaker"></b><p id="previewText"></p><div class="preview-options"></div></div></div></div></div></div></div>
     <script src="./app.js"></script>
   </body>
 </html>

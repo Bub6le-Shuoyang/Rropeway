@@ -46,7 +46,11 @@ ipcMain.handle('project:open', async () => {
     return { filePath, data };
   } catch (error) { throw new Error(`项目文件无法读取：${error.message}`); }
 });
-ipcMain.handle('project:save', async (_event, payload) => {
+ipcMain.handle('project:open-path', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !['.scriptroom', '.json'].includes(path.extname(filePath).toLowerCase())) throw new Error('项目路径无效');
+  try { return { filePath, data: normalizeProject(JSON.parse(await fs.readFile(filePath, 'utf8'))) }; }
+  catch (error) { throw new Error(`项目文件无法读取：${error.message}`); }
+});ipcMain.handle('project:save', async (_event, payload) => {
   const data = normalizeProject(payload?.data);
   let target = payload?.filePath;
   if (!target) {
