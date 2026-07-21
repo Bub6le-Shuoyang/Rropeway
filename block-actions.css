@@ -475,6 +475,216 @@
   }
 }
 
+.window-drag-region {
+  gap: 14px;
+}
+
+.window-menu {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.window-menu-button {
+  height: 27px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0 9px;
+  background: transparent;
+  color: #846f68;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.window-menu-button:hover,
+.window-menu:has(.window-project-menu:not(.hidden)) .window-menu-button {
+  background: #ffe8de;
+  color: #d85d46;
+}
+
+.window-project-menu {
+  position: absolute;
+  z-index: 80;
+  top: 31px;
+  left: 0;
+  width: 210px;
+  padding: 6px;
+  border: 1px solid #eadbd3;
+  border-radius: 9px;
+  background: #fffefa;
+  box-shadow: 0 14px 34px rgba(77, 59, 50, 0.16);
+}
+
+.window-project-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 9px;
+  background: transparent;
+  color: #535a55;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.window-project-menu button:hover {
+  background: #fff0e9;
+  color: #d75e47;
+}
+
+.window-project-menu kbd {
+  color: #a49e99;
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.chapter-entry {
+  grid-template-columns: 18px 18px minmax(0, 1fr) 18px 22px;
+}
+
+.chapter-tree-toggle {
+  width: 18px;
+  height: 24px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #929991;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.chapter-drag-handle,
+.scene-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #b9bbb5;
+  cursor: grab;
+  font-size: 11px;
+  user-select: none;
+}
+
+.chapter-drag-handle:active,
+.scene-drag-handle:active {
+  cursor: grabbing;
+}
+
+.chapter-tree-node.dragging,
+.chapter-scene-entry.dragging {
+  opacity: 0.48;
+}
+
+.chapter-tree-node.drag-over > .chapter-entry,
+.chapter-scene-entry.drag-over {
+  border-radius: 6px;
+  background: #fff0e9;
+  box-shadow: inset 0 0 0 1px #ef9a86;
+}
+
+.chapter-scene-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 2px;
+}
+
+.chapter-scene-file {
+  width: 100%;
+}
+
+.tree-context-menu {
+  position: fixed;
+  z-index: 120;
+  width: 164px;
+  padding: 5px;
+  border: 1px solid #e8d9d1;
+  border-radius: 8px;
+  background: #fffefa;
+  box-shadow: 0 14px 34px rgba(73, 57, 48, 0.18);
+}
+
+.tree-context-menu button {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 9px;
+  background: transparent;
+  color: #59605b;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.tree-context-menu button:hover {
+  background: #f4f1ed;
+}
+
+.tree-context-menu button.danger {
+  color: #d8513d;
+}
+
+.tree-context-menu button.danger:hover {
+  background: #fff0ec;
+}
+
+.segment-block .block-handle {
+  left: 9px;
+  width: 17px;
+  height: 17px;
+  border: 1px solid #bfc7c1;
+  border-radius: 50%;
+  background: var(--bg);
+  color: transparent;
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.segment-block .block-handle::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #9ca79f;
+}
+
+.segment-block .block-handle:active {
+  cursor: grabbing;
+}
+
+.segment-navigator {
+  top: 50px;
+}
+
+.back-to-top {
+  top: 9px;
+  right: 313px;
+  bottom: auto;
+  width: 30px;
+  height: 30px;
+  justify-content: center;
+  border-radius: 50%;
+  padding: 0;
+  font-size: 16px;
+}
+
+.back-to-top span {
+  display: none;
+}
+
+@media (max-width: 1000px) {
+  .back-to-top {
+    right: -2px;
+  }
+}
+
 .sidebar {
   height: 100%;
   min-height: 0;
@@ -507,7 +717,7 @@
 
 .chapter-entry {
   position: relative;
-  grid-template-columns: 18px minmax(0, 1fr) 24px;
+  grid-template-columns: 18px 18px minmax(0, 1fr) 18px 22px;
   gap: 2px;
   min-height: 45px;
 }
@@ -565,6 +775,17 @@
   width: 22px;
   height: 22px;
   font-size: 11px;
+}
+
+.chapter-entry:hover .chapter-rename,
+.chapter-entry .chapter.active ~ .chapter-rename {
+  opacity: 1;
+}
+
+.window-chrome {
+  position: relative;
+  z-index: 90;
+  overflow: visible;
 }
 
 .chapter-scene-list {
