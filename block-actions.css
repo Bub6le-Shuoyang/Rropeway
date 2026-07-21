@@ -1343,6 +1343,456 @@
   gap: 6px;
 }
 
+.window-settings-menu {
+  width: 190px;
+}
+
+.settings-menu-option .settings-check {
+  opacity: 0;
+  color: #e9664d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.settings-menu-option.active {
+  background: #fff0e9;
+  color: #d75e47;
+}
+
+.settings-menu-option.active .settings-check {
+  opacity: 1;
+}
+
+body[data-theme="dark"] {
+  --bg: #171a1d;
+  --panel: #202428;
+  --ink: #edf0ee;
+  --muted: #9ba49f;
+  --line: #343b40;
+  --accent: #ff7459;
+  --accent-soft: #3b2521;
+  --green: #82aa90;
+  --shadow: 0 14px 40px rgba(0, 0, 0, .24);
+  background: #171a1d;
+  color: #edf0ee;
+}
+
+body[data-theme="dark"] .window-chrome {
+  border-bottom-color: #343a3f;
+  background: #181b1e;
+}
+
+body[data-theme="dark"] .window-brand {
+  color: #f0f2f0;
+}
+
+body[data-theme="dark"] .window-version,
+body[data-theme="dark"] .window-menu-label,
+body[data-theme="dark"] .window-project-menu kbd {
+  color: #848d88;
+}
+
+body[data-theme="dark"] .window-menu-button,
+body[data-theme="dark"] .window-controls button {
+  color: #aeb6b1;
+}
+
+body[data-theme="dark"] .window-menu-button:hover,
+body[data-theme="dark"] .window-menu:has(.window-project-menu:not(.hidden)) .window-menu-button {
+  background: #352723;
+  color: #ff8168;
+}
+
+body[data-theme="dark"] .window-project-menu,
+body[data-theme="dark"] .tree-context-menu,
+body[data-theme="dark"] .project-popover,
+body[data-theme="dark"] .project-search-results {
+  border-color: #3a4146;
+  background: #22262a;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .38);
+}
+
+body[data-theme="dark"] .window-menu-separator,
+body[data-theme="dark"] .application-dialog-header,
+body[data-theme="dark"] .shortcut-row,
+body[data-theme="dark"] .sidebar-section-title,
+body[data-theme="dark"] .inspector-section,
+body[data-theme="dark"] .user-card {
+  border-color: #363d42;
+}
+
+body[data-theme="dark"] .window-project-menu button,
+body[data-theme="dark"] .tree-context-menu button,
+body[data-theme="dark"] .project-list-item,
+body[data-theme="dark"] .project-search-result {
+  color: #c9cfcb;
+}
+
+body[data-theme="dark"] .window-project-menu button:hover,
+body[data-theme="dark"] .tree-context-menu button:hover,
+body[data-theme="dark"] .project-list-item:hover,
+body[data-theme="dark"] .project-search-result:hover,
+body[data-theme="dark"] .project-search-result:focus-visible {
+  background: #342823;
+  color: #ff8168;
+}
+
+body[data-theme="dark"] .settings-menu-option.active {
+  background: #3b2823;
+  color: #ff8168;
+}
+
+body[data-theme="dark"] .settings-menu-option .settings-check {
+  color: #ff7459;
+}
+
+body[data-theme="dark"] .sidebar {
+  border-right-color: #31373c;
+  background: #1d2125;
+}
+
+body[data-theme="dark"] .main-content,
+body[data-theme="dark"] .script-panel,
+body[data-theme="dark"] .alternate-view {
+  background: #171a1d;
+}
+
+body[data-theme="dark"] .topbar {
+  border-bottom-color: #30373b;
+  background: rgba(27, 31, 34, .94);
+}
+
+body[data-theme="dark"] .workspace-switcher,
+body[data-theme="dark"] .project-search {
+  border-color: #3a4247;
+  background: #23282c;
+  box-shadow: none;
+}
+
+body[data-theme="dark"] .project-search:focus-within {
+  border-color: #ff8066;
+  background: #252a2e;
+  box-shadow: 0 0 0 3px rgba(255, 116, 89, .12);
+}
+
+body[data-theme="dark"] .project-search input,
+body[data-theme="dark"] .editor-dialog-input,
+body[data-theme="dark"] input,
+body[data-theme="dark"] textarea,
+body[data-theme="dark"] select {
+  color: #e3e8e5;
+  caret-color: #ff8066;
+}
+
+body[data-theme="dark"] input::placeholder,
+body[data-theme="dark"] textarea::placeholder {
+  color: #727c77;
+}
+
+body[data-theme="dark"] .nav-item,
+body[data-theme="dark"] .chapter,
+body[data-theme="dark"] .chapter-scene-file {
+  color: #aab2ad;
+}
+
+body[data-theme="dark"] .nav-item:hover,
+body[data-theme="dark"] .chapter-entry .chapter:hover,
+body[data-theme="dark"] .chapter-scene-file:hover,
+body[data-theme="dark"] .chapter-tree-toggle:hover {
+  background: #292e32;
+  color: #e0e5e2;
+}
+
+body[data-theme="dark"] .nav-item.active,
+body[data-theme="dark"] .chapter-entry .chapter.active,
+body[data-theme="dark"] .chapter-scene-file.active {
+  background: #3a2823;
+  color: #ff8066;
+}
+
+body[data-theme="dark"] .chapter-scene-count,
+body[data-theme="dark"] .project-search-result-type {
+  background: #30363a;
+  color: #9ca59f;
+}
+
+body[data-theme="dark"] .chapter-scene-list {
+  border-left-color: #383f43;
+}
+
+body[data-theme="dark"] .chapter-tree-node.drag-over > .chapter-entry,
+body[data-theme="dark"] .chapter-scene-entry.drag-over {
+  box-shadow: inset 0 -2px #ff7459;
+}
+
+body[data-theme="dark"] .scene-tabs,
+body[data-theme="dark"] .canvas-toolbar,
+body[data-theme="dark"] .inspector,
+body[data-theme="dark"] .inspector-header {
+  border-color: #343b40;
+}
+
+body[data-theme="dark"] .scene-tab,
+body[data-theme="dark"] .add-scene,
+body[data-theme="dark"] .canvas-toolbar,
+body[data-theme="dark"] .breadcrumb,
+body[data-theme="dark"] .muted,
+body[data-theme="dark"] .inspector-section-description,
+body[data-theme="dark"] .property-group label,
+body[data-theme="dark"] .project-list-copy small,
+body[data-theme="dark"] .project-search-result-copy small {
+  color: #8f9993;
+}
+
+body[data-theme="dark"] .breadcrumb strong,
+body[data-theme="dark"] .script-heading h1,
+body[data-theme="dark"] .section-title h2,
+body[data-theme="dark"] .inspector-header,
+body[data-theme="dark"] .inspector-section h3,
+body[data-theme="dark"] .project-list-copy b {
+  color: #e6ebe8;
+}
+
+body[data-theme="dark"] .script-block,
+body[data-theme="dark"] .character-card,
+body[data-theme="dark"] .asset-card,
+body[data-theme="dark"] .choice-block,
+body[data-theme="dark"] .character-empty-state {
+  border-color: #363d42;
+  background-color: #22272b;
+  color: #dce2de;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .13);
+}
+
+body[data-theme="dark"] .script-block:hover,
+body[data-theme="dark"] .script-block.selected,
+body[data-theme="dark"] .character-card.selected {
+  border-color: #ff8066;
+  box-shadow: 0 7px 22px rgba(255, 116, 89, .12);
+}
+
+body[data-theme="dark"] .script-block p,
+body[data-theme="dark"] .dialogue-text,
+body[data-theme="dark"] [contenteditable="true"] {
+  color: #e3e8e5;
+}
+
+body[data-theme="dark"] .block-note,
+body[data-theme="dark"] .emotion-pill {
+  background: #3b2924;
+  color: #ff927b;
+}
+
+body[data-theme="dark"] .voice-pill,
+body[data-theme="dark"] .block-tags span,
+body[data-theme="dark"] .status-tag-chip {
+  background: #24352e;
+  color: #93c3a5;
+}
+
+body[data-theme="dark"] .add-block {
+  border-color: #3a4146;
+  background: transparent;
+  color: #909a94;
+}
+
+body[data-theme="dark"] .add-block::before {
+  border-color: #59635d;
+}
+
+body[data-theme="dark"] .add-block:hover {
+  border-color: #ff8066;
+  background: #30231f;
+  color: #ff8066;
+}
+
+body[data-theme="dark"] .inspector {
+  border-left-color: #333a3f;
+  background: #1d2125;
+}
+
+body[data-theme="dark"] .inspector-empty,
+body[data-theme="dark"] .inspector-empty.compact {
+  border-color: #3a4247;
+  background: #24292d;
+  color: #8f9993;
+}
+
+body[data-theme="dark"] :is(.select-control, .status-tag-editor, .text-format-button, .text-align-button, .text-clear-button, .text-format-select, .text-color-control, .inspector-section textarea, .inspector-section input) {
+  border-color: #3a4247;
+  background: #24292d;
+  color: #d9dfdb;
+}
+
+body[data-theme="dark"] :is(.text-format-button, .text-align-button, .text-clear-button):hover,
+body[data-theme="dark"] :is(.text-format-button, .text-align-button).active {
+  border-color: #ff8066;
+  background: #3a2823;
+  color: #ff8066;
+}
+
+body[data-theme="dark"] .segment-axis-line,
+body[data-theme="dark"] .timeline-line {
+  background: #394044;
+}
+
+body[data-theme="dark"] .segment-nav-dot {
+  background: #68726c;
+}
+
+body[data-theme="dark"] .segment-nav-label {
+  border-color: #41494e;
+  background: #252a2e;
+  color: #cbd2ce;
+}
+
+body[data-theme="dark"] .segment-block .block-content {
+  background: var(--bg);
+}
+
+body[data-theme="dark"] .segment-block::before {
+  border-top-color: #3a4247;
+}
+
+body[data-theme="dark"] .segment-block .block-handle {
+  border-color: #59635d;
+  background: var(--bg);
+}
+
+body[data-theme="dark"] .editor-dialog,
+body[data-theme="dark"] .application-dialog,
+body[data-theme="dark"] .preview-window {
+  border-color: #3a4146;
+  background: #22272b;
+  color: #e2e7e4;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .5);
+}
+
+body[data-theme="dark"] .editor-dialog-overlay,
+body[data-theme="dark"] .modal-backdrop {
+  background: rgba(5, 7, 8, .72);
+}
+
+body[data-theme="dark"] .application-dialog-close:hover,
+body[data-theme="dark"] .setting-choice:hover,
+body[data-theme="dark"] .setting-choice.active {
+  background: #342823;
+  color: #ff8066;
+}
+
+body[data-theme="dark"] .setting-choice,
+body[data-theme="dark"] .shortcut-row kbd {
+  border-color: #3c4449;
+  background: #292e32;
+  color: #b8c0bb;
+}
+
+body[data-theme="dark"] .file-button {
+  border-color: #3d454a;
+  background: #292e32;
+  color: #c7ceca;
+}
+
+body[data-theme="dark"] .file-button.save,
+body[data-theme="dark"] .primary-button {
+  border-color: transparent;
+  background: #f2674f;
+  color: #fff;
+}
+
+body[data-theme="dark"] .sync-status,
+body[data-theme="dark"] .save-time,
+body[data-theme="dark"] .sidebar-section-title,
+body[data-theme="dark"] .project-search-icon {
+  color: #818b85;
+}
+
+body[data-theme="dark"] ::selection {
+  background: rgba(255, 116, 89, .34);
+  color: #fff;
+}
+
+.sync-status {
+  min-width: 0;
+  gap: 4px;
+}
+
+.save-separator {
+  opacity: .58;
+}
+
+.sidebar-version {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #aaa9a2;
+}
+
+.timeline-line {
+  left: 4px;
+}
+
+.add-block {
+  width: calc(100% - 24px);
+  margin-left: 24px;
+}
+
+body[data-theme="dark"] .sidebar-version {
+  color: #747e78;
+}
+
+.workspace-switcher {
+  min-width: 0;
+}
+
+#workspaceTitle {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-switcher .workspace-dot,
+.workspace-switcher .chevron {
+  flex: 0 0 auto;
+}
+
+.project-popover {
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 96px));
+  overflow: hidden;
+}
+
+.project-list {
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.project-list-item {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.project-list-copy {
+  width: 0;
+}
+
+.project-list-copy b,
+.project-list-copy small {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-current-mark {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .chapter-scene-list {
   display: grid;
   gap: 1px;

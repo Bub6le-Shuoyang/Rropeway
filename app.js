@@ -4,6 +4,7 @@ const navItems = document.querySelectorAll('.nav-item');
 const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), assets: document.getElementById('assetsView') };
 const toast = document.getElementById('toast');
 let desktopState = { filePath: null, data: null, dirty: false };
+const LAST_PROJECT_STORAGE_KEY = 'scriptroom-last-project';
 let activeChapterIndex = 0;
 let activeSceneIndex = 0;
 let selectedBlockIndex = 1;
@@ -24,12 +25,13 @@ let draggedSceneInfo = null;
 let ignoreTreeClickUntil = 0;
 
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('show'), 2400); }
-function setSaveStatus(status, time = '') { document.getElementById('saveStatus').textContent = status; document.getElementById('saveTime').textContent = time; }
+function setSaveStatus(status) { document.getElementById('saveStatus').textContent = status; }
+function setProjectLocationStatus(status) { document.getElementById('projectLocationStatus').textContent = status; }
 function markDirty() {
   desktopState.dirty = true;
   editRevision += 1;
   desktopApi?.setDirty(true);
-  setSaveStatus(desktopState.filePath ? '等待自动保存' : '有未保存修改', '现在');
+  setSaveStatus(desktopState.filePath ? '等待自动保存' : '未保存');
   recordProjectSnapshot();
   scheduleAutoSave();
 }
@@ -233,7 +235,7 @@ function restoreProjectHistory(targetIndex, message) {
   desktopState.dirty = true;
   editRevision += 1;
   desktopApi?.setDirty(true);
-  setSaveStatus(filePath ? '等待自动保存' : '有未保存修改', '现在');
+  setSaveStatus(filePath ? '等待自动保存' : '未保存');
   updateUndoAvailability();
   scheduleAutoSave();
   showToast(message);
@@ -503,7 +505,7 @@ async function renameProject() {
   markDirty();
   showToast(`项目已重命名为「${normalizedTitle}」`);
 }
-function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setSaveStatus(filePath ? '已打开本地项目' : '本地新项目', filePath ? '刚刚' : '未保存'); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
+function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
 function scheduleAutoSave(delay = 700) {
   clearTimeout(autoSaveTimer);
   if (!desktopState.filePath || !desktopState.dirty || restoringProjectHistory) return;
@@ -516,29 +518,30 @@ async function saveProject(options = {}) {
   if (activeSavePromise) { autoSaveQueued = true; return activeSavePromise; }
   const revisionAtStart = editRevision;
   const payload = { filePath: desktopState.filePath, data: JSON.parse(JSON.stringify(captureProject())) };
-  setSaveStatus(silent ? '正在自动保存' : '正在保存', '现在');
+  setSaveStatus(silent ? '正在自动保存' : '正在保存');
   activeSavePromise = (async () => {
     try {
       const result = await desktopApi.saveProject(payload);
-      if (!result) { setSaveStatus('保存已取消', '现在'); return false; }
+      if (!result) { setSaveStatus('未保存'); return false; }
       desktopState.filePath = result.filePath;
+      setProjectLocationStatus('本地项目');
       rememberProject(result.filePath, result.data.title);
       if (editRevision === revisionAtStart) {
         desktopState.data = result.data;
         desktopState.dirty = false;
         desktopApi.setDirty(false);
         localStorage.removeItem('scriptroom-draft');
-        setSaveStatus(silent ? '已自动保存' : '已保存到本地', new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        setSaveStatus('已保存');
       } else {
         desktopState.dirty = true;
         desktopApi.setDirty(true);
         autoSaveQueued = true;
-        setSaveStatus('有新的修改', '现在');
+        setSaveStatus('未保存');
       }
       if (!silent) showToast('项目已保存');
       return true;
     } catch (error) {
-      setSaveStatus('自动保存失败', '现在');
+      setSaveStatus('保存失败');
       showToast(error.message || '保存失败');
       return false;
     }
@@ -601,44 +604,66 @@ function setWindowProjectMenuOpen(open) {
   button.setAttribute('aria-expanded', String(open));
 }
 function closeWindowProjectMenu() { setWindowProjectMenuOpen(false); }
-document.getElementById('projectMenuButton')?.addEventListener('click', (event) => { event.stopPropagation(); const menu = document.getElementById('windowProjectMenu'); setWindowProjectMenuOpen(Boolean(menu?.hidden)); });
+document.getElementById('projectMenuButton')?.addEventListener('click', (event) => { event.stopPropagation(); closeWindowSettingsMenu(); const menu = document.getElementById('windowProjectMenu'); setWindowProjectMenuOpen(Boolean(menu?.hidden)); });
 document.getElementById('newProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); newProject(); }); document.getElementById('openProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); openProject(); }); document.getElementById('saveProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); saveProject(); }); document.getElementById('undoProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); undoProjectChange(); }); document.getElementById('renameProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); renameProject(); }); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
 function applyInterfaceScale(scale, persist = true) {
   const safeScale = [90, 100, 110].includes(Number(scale)) ? Number(scale) : 100;
   document.body.style.zoom = String(safeScale / 100);
   if (persist) localStorage.setItem('rropeway-interface-scale', String(safeScale));
+  updateSettingsMenuState();
 }
+const systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+function currentThemePreference() {
+  const value = localStorage.getItem('rropeway-theme') || 'light';
+  return ['light', 'dark', 'system'].includes(value) ? value : 'light';
+}
+function updateSettingsMenuState() {
+  const theme = currentThemePreference();
+  const scale = Number(localStorage.getItem('rropeway-interface-scale') || 100);
+  document.querySelectorAll('[data-theme-option]').forEach((button) => button.classList.toggle('active', button.dataset.themeOption === theme));
+  document.querySelectorAll('[data-scale-option]').forEach((button) => button.classList.toggle('active', Number(button.dataset.scaleOption) === scale));
+}
+function applyThemePreference(theme, persist = true) {
+  const preference = ['light', 'dark', 'system'].includes(theme) ? theme : 'light';
+  const resolvedTheme = preference === 'system' ? (systemThemeQuery.matches ? 'dark' : 'light') : preference;
+  document.body.dataset.theme = resolvedTheme;
+  document.body.dataset.themePreference = preference;
+  document.documentElement.style.colorScheme = resolvedTheme;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolvedTheme === 'dark' ? '#171a1d' : '#f8f7f4');
+  if (persist) localStorage.setItem('rropeway-theme', preference);
+  updateSettingsMenuState();
+}
+function setWindowSettingsMenuOpen(open) {
+  const menu = document.getElementById('windowSettingsMenu'); const button = document.getElementById('windowSettingsButton');
+  if (!menu || !button) return;
+  menu.hidden = !open;
+  menu.classList.toggle('hidden', !open);
+  button.setAttribute('aria-expanded', String(open));
+  if (open) updateSettingsMenuState();
+}
+function closeWindowSettingsMenu() { setWindowSettingsMenuOpen(false); }
 function openApplicationDialog(type) {
   document.querySelector('.application-dialog-overlay')?.remove();
   const overlay = addChild(document.body, 'div', 'editor-dialog-overlay application-dialog-overlay');
   const dialog = addChild(overlay, 'div', 'editor-dialog application-dialog');
   const header = addChild(dialog, 'div', 'application-dialog-header');
-  addChild(header, 'h3', '', type === 'settings' ? '设置' : '帮助与快捷键');
+  addChild(header, 'h3', '', '帮助与快捷键');
   const close = addChild(header, 'button', 'application-dialog-close', '×'); close.type = 'button'; close.title = '关闭';
   const body = addChild(dialog, 'div', 'application-dialog-body');
-  if (type === 'settings') {
-    addChild(body, 'p', 'application-dialog-description', '调整本机编辑器的显示比例。设置只保存在当前电脑。');
-    const section = addChild(body, 'section', 'settings-section');
-    addChild(section, 'b', '', '界面大小');
-    const choices = addChild(section, 'div', 'setting-choice-row');
-    const current = Number(localStorage.getItem('rropeway-interface-scale') || 100);
-    [{ value: 90, label: '紧凑' }, { value: 100, label: '标准' }, { value: 110, label: '宽松' }].forEach((option) => {
-      const button = addChild(choices, 'button', `setting-choice${current === option.value ? ' active' : ''}`, option.label); button.type = 'button';
-      button.addEventListener('click', () => { applyInterfaceScale(option.value); choices.querySelectorAll('button').forEach((item) => item.classList.toggle('active', item === button)); });
-    });
-  } else {
-    addChild(body, 'p', 'application-dialog-description', '常用操作均可通过键盘或章节树完成。');
-    const shortcuts = addChild(body, 'div', 'shortcut-list');
-    [['全项目搜索', 'Ctrl + K'], ['新建项目', 'Ctrl + N'], ['打开项目', 'Ctrl + O'], ['保存项目', 'Ctrl + S'], ['打开设置', 'Ctrl + ,'], ['重命名章节或场景', '双击名称'], ['管理章节或场景', '右键菜单'], ['调整章节或场景顺序', '拖动左侧圆点']].forEach(([label, keys]) => {
-      const row = addChild(shortcuts, 'div', 'shortcut-row'); addChild(row, 'span', '', label); addChild(row, 'kbd', '', keys);
-    });
-  }
+  addChild(body, 'p', 'application-dialog-description', '常用操作均可通过键盘或章节树完成。');
+  const shortcuts = addChild(body, 'div', 'shortcut-list');
+  [['全项目搜索', 'Ctrl + K'], ['新建项目', 'Ctrl + N'], ['打开项目', 'Ctrl + O'], ['保存项目', 'Ctrl + S'], ['打开设置', 'Ctrl + ,'], ['撤回上一步', 'Ctrl + Z'], ['重命名章节或场景', '双击名称'], ['管理章节或场景', '右键菜单'], ['调整章节或场景顺序', '按住对应行拖动']].forEach(([label, keys]) => {
+    const row = addChild(shortcuts, 'div', 'shortcut-row'); addChild(row, 'span', '', label); addChild(row, 'kbd', '', keys);
+  });
   const dismiss = () => overlay.remove();
   close.addEventListener('click', dismiss);
   overlay.addEventListener('click', (event) => { if (event.target === overlay) dismiss(); });
 }
-document.getElementById('windowSettingsButton')?.addEventListener('click', () => { closeWindowProjectMenu(); openApplicationDialog('settings'); });
-document.getElementById('windowHelpButton')?.addEventListener('click', () => { closeWindowProjectMenu(); openApplicationDialog('help'); });
+document.getElementById('windowSettingsButton')?.addEventListener('click', (event) => { event.stopPropagation(); closeWindowProjectMenu(); const menu = document.getElementById('windowSettingsMenu'); setWindowSettingsMenuOpen(Boolean(menu?.hidden)); });
+document.querySelectorAll('[data-theme-option]').forEach((button) => button.addEventListener('click', () => { applyThemePreference(button.dataset.themeOption); closeWindowSettingsMenu(); }));
+document.querySelectorAll('[data-scale-option]').forEach((button) => button.addEventListener('click', () => { applyInterfaceScale(Number(button.dataset.scaleOption)); closeWindowSettingsMenu(); }));
+document.getElementById('windowHelpButton')?.addEventListener('click', () => { closeWindowProjectMenu(); closeWindowSettingsMenu(); openApplicationDialog('help'); });
+systemThemeQuery.addEventListener('change', () => { if (currentThemePreference() === 'system') applyThemePreference('system', false); });
 function projectSearchText(value) {
   const container = document.createElement('div'); container.innerHTML = String(value || ''); return (container.textContent || '').replace(/\s+/g, ' ').trim();
 }
@@ -697,11 +722,12 @@ function renderProjectSearchResults() {
 document.getElementById('projectSearchInput')?.addEventListener('input', renderProjectSearchResults);
 document.getElementById('projectSearchInput')?.addEventListener('focus', renderProjectSearchResults);
 document.getElementById('previewBtn')?.addEventListener('click', () => { updatePreview(); document.getElementById('previewModal').classList.remove('hidden'); }); document.getElementById('closePreview')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden')); document.querySelector('.modal-backdrop')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden'));
-document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); openApplicationDialog('settings'); } });
+document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); closeWindowSettingsMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); closeWindowProjectMenu(); setWindowSettingsMenuOpen(true); } });
+applyThemePreference(currentThemePreference(), false);
 applyInterfaceScale(Number(localStorage.getItem('rropeway-interface-scale') || 100), false);
 desktopApi?.onBeforeClose(async () => { const saved = await saveProject(); if (saved) desktopApi.finishClose(); else desktopApi.cancelClose(); });
 setInterval(() => { if (desktopState.dirty && desktopState.data) localStorage.setItem('scriptroom-draft', JSON.stringify({ filePath: desktopState.filePath, data: captureProject(), savedAt: Date.now() })); }, 10000);
-if (desktopApi) desktopApi.newProject().then(async (result) => { const draft = localStorage.getItem('scriptroom-draft'); if (draft && await requestConfirmation('发现上次未保存的临时草稿，是否恢复？')) { const recovered = JSON.parse(draft); applyProject(recovered.data, recovered.filePath); markDirty(); } else { applyProject(result.data); } });
+if (desktopApi) initializeProject();
 
 // Interactive editor layer: characters, inspector controls, drag sorting and project switcher.
 let draggedBlockIndex = null;
@@ -900,14 +926,52 @@ function recentProjects() {
     return projects.filter((item) => { if (!item?.filePath || seen.has(item.filePath)) return false; seen.add(item.filePath); return true; });
   } catch { return []; }
 }
+function lastProjectPath() {
+  return localStorage.getItem(LAST_PROJECT_STORAGE_KEY) || '';
+}
+function rememberLastProject(filePath) {
+  if (filePath) localStorage.setItem(LAST_PROJECT_STORAGE_KEY, filePath);
+  else localStorage.removeItem(LAST_PROJECT_STORAGE_KEY);
+}
 function rememberProject(filePath, title) {
   if (!filePath) return;
   const projects = recentProjects().filter((item) => item.filePath !== filePath);
   projects.unshift({ filePath, title: title || '未命名项目', openedAt: Date.now() });
   localStorage.setItem('scriptroom-recent-projects', JSON.stringify(projects));
+  rememberLastProject(filePath);
 }
 function forgetRecentProject(filePath) {
   localStorage.setItem('scriptroom-recent-projects', JSON.stringify(recentProjects().filter((item) => item.filePath !== filePath)));
+  if (lastProjectPath() === filePath) rememberLastProject(null);
+}
+async function initializeProject() {
+  const draft = localStorage.getItem('scriptroom-draft');
+  if (draft) {
+    try {
+      if (await requestConfirmation('发现上次未保存的临时草稿，是否恢复？')) {
+        const recovered = JSON.parse(draft);
+        applyProject(recovered.data, recovered.filePath);
+        markDirty();
+        return;
+      }
+    } catch {
+      localStorage.removeItem('scriptroom-draft');
+    }
+  }
+  const filePath = lastProjectPath() || recentProjects()[0]?.filePath || '';
+  if (filePath) {
+    try {
+      if (await desktopApi.projectExists(filePath)) {
+        const result = await desktopApi.openProjectPath(filePath);
+        applyProject(result.data, result.filePath);
+        return;
+      }
+    } catch {}
+    forgetRecentProject(filePath);
+    showToast('上次打开的项目已不存在，已清理历史记录');
+  }
+  const result = await desktopApi.newProject();
+  applyProject(result.data);
 }
 async function openRecentProject(filePath) {
   if (filePath === desktopState.filePath) { document.querySelector('[data-view="editor"]').click(); return; }
@@ -935,8 +999,8 @@ function openProjectMenu() {
   entries.forEach((project) => {
     const item = addChild(list, 'button', `project-list-item${project.current ? ' current' : ''}`);
     const copy = addChild(item, 'span', 'project-list-copy');
-    addChild(copy, 'b', '', project.title);
-    addChild(copy, 'small', '', project.filePath || '尚未保存到磁盘');
+    const projectTitle = addChild(copy, 'b', '', project.title); projectTitle.title = project.title;
+    const projectPath = addChild(copy, 'small', '', project.filePath || '尚未保存到磁盘'); projectPath.title = project.filePath || '尚未保存到磁盘';
     if (project.current) addChild(item, 'span', 'project-current-mark', '当前');
     item.addEventListener('click', () => {
       menu.remove();
@@ -950,7 +1014,7 @@ function openProjectMenu() {
   menu.style.top = `${anchor.bottom + 8}px`;
 }
 const baseApplyProject = applyProject;
-applyProject = function (data, filePath = null, options = {}) { baseApplyProject(data, filePath, options); if (filePath) rememberProject(filePath, data.title); renderCharacters(); renderInspector(); };
+applyProject = function (data, filePath = null, options = {}) { baseApplyProject(data, filePath, options); if (filePath) rememberProject(filePath, data.title); else rememberLastProject(null); renderCharacters(); renderInspector(); };
 function updateEditorScrollTools() {
   const panel = document.querySelector('.script-panel'); const backToTop = document.getElementById('backToTop'); const navigator = document.getElementById('segmentNavigator');
   if (!panel || !backToTop || !navigator) return;
@@ -1013,7 +1077,7 @@ document.addEventListener('click', (event) => {
     return;
   }
   if (!event.target.closest('#workspaceSwitcher') && !event.target.closest('.project-popover')) document.querySelector('.project-popover')?.remove();
-  if (!event.target.closest('.window-menu')) closeWindowProjectMenu();
+  if (!event.target.closest('.window-menu')) { closeWindowProjectMenu(); closeWindowSettingsMenu(); }
   if (!event.target.closest('#projectSearch')) setProjectSearchResultsOpen(false);
   if (!event.target.closest('.tree-context-menu')) closeTreeContextMenu();
 });
