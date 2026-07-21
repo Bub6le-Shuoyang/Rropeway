@@ -120,6 +120,13 @@ function captureProject() { syncCurrentScene(); const data = desktopState.data; 
 function createBlockElement(block, index) {
   const wrapper = node('div', `script-block ${block.type === 'choice' ? 'choice-block' : block.type}${index === selectedBlockIndex ? ' selected' : ''}`);
   wrapper.dataset.blockIndex = String(index);
+  const actions = addChild(wrapper, 'div', 'block-actions');
+  const moveUp = addChild(actions, 'button', 'block-action', '\u2191');
+  moveUp.type = 'button'; moveUp.title = '\u4e0a\u79fb'; moveUp.dataset.blockAction = 'move-up'; moveUp.disabled = index === 0;
+  const moveDown = addChild(actions, 'button', 'block-action', '\u2193');
+  moveDown.type = 'button'; moveDown.title = '\u4e0b\u79fb'; moveDown.dataset.blockAction = 'move-down'; moveDown.disabled = index === (currentScene()?.blocks?.length || 0) - 1;
+  const remove = addChild(actions, 'button', 'block-action delete', '\u00d7');
+  remove.type = 'button'; remove.title = '\u5220\u9664'; remove.dataset.blockAction = 'delete';
   addChild(wrapper, 'div', 'block-handle', '⠿');
   const content = node('div', 'block-content');
   if (block.type === 'narration') {
@@ -402,13 +409,49 @@ function openProjectMenu() {
 const baseApplyProject = applyProject;
 applyProject = function (data, filePath = null) { baseApplyProject(data, filePath); if (filePath) rememberProject(filePath, data.title); renderCharacters(); renderInspector(); };
 const baseRenderScene = renderScene;
-renderScene = function () { baseRenderScene(); document.querySelectorAll('.script-block').forEach((block) => { block.draggable = true; }); renderInspector(); };
+renderScene = function () { baseRenderScene(); document.querySelectorAll('.block-handle').forEach((handle) => { handle.draggable = true; }); renderInspector(); };
 const baseRenderImportedAssets = renderImportedAssets;
 renderImportedAssets = function () { baseRenderImportedAssets(); };
 document.getElementById('workspaceSwitcher')?.addEventListener('click', openProjectMenu);
 document.getElementById('windowMinimize')?.addEventListener('click', () => desktopApi?.minimize()); document.getElementById('windowMaximize')?.addEventListener('click', () => desktopApi?.toggleMaximize()); document.getElementById('windowClose')?.addEventListener('click', () => desktopApi?.closeWindow());
-document.addEventListener('dragstart', (event) => { const block = event.target.closest('.script-block'); if (!block || !event.target.closest('.block-handle')) { if (event.target.closest('.script-block')) event.preventDefault(); return; } draggedBlockIndex = Number(block.dataset.blockIndex); block.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; });
+function moveBlock(fromIndex, offset) {
+  syncCurrentScene();
+  const scene = currentScene();
+  const targetIndex = fromIndex + offset;
+  if (!scene?.blocks?.[fromIndex] || targetIndex < 0 || targetIndex >= scene.blocks.length) return;
+  const [moved] = scene.blocks.splice(fromIndex, 1);
+  scene.blocks.splice(targetIndex, 0, moved);
+  selectedBlockIndex = targetIndex;
+  renderScene();
+  markDirty();
+  showToast(offset < 0 ? '\u5bf9\u767d\u5df2\u4e0a\u79fb' : '\u5bf9\u767d\u5df2\u4e0b\u79fb');
+}
+async function deleteBlock(index) {
+  syncCurrentScene();
+  const scene = currentScene();
+  if (!scene?.blocks?.[index]) return;
+  if (!(await requestConfirmation('\u786e\u5b9a\u5220\u9664\u8fd9\u6761\u5185\u5bb9\u5417\uff1f\u6b64\u64cd\u4f5c\u65e0\u6cd5\u76f4\u63a5\u64a4\u9500\u3002'))) return;
+  scene.blocks.splice(index, 1);
+  selectedBlockIndex = Math.min(index, Math.max(0, scene.blocks.length - 1));
+  renderScene();
+  markDirty();
+  showToast('\u5df2\u5220\u9664');
+}
+document.addEventListener('dragstart', (event) => { const handle = event.target.closest('.block-handle'); const block = handle?.closest('.script-block'); if (!block) return; draggedBlockIndex = Number(block.dataset.blockIndex); block.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', block.dataset.blockIndex); });
 document.addEventListener('dragover', (event) => { const block = event.target.closest('.script-block'); if (!block || draggedBlockIndex === null) return; event.preventDefault(); document.querySelectorAll('.script-block').forEach((item) => item.classList.remove('drag-over')); if (Number(block.dataset.blockIndex) !== draggedBlockIndex) block.classList.add('drag-over'); });
 document.addEventListener('drop', (event) => { const target = event.target.closest('.script-block'); if (!target || draggedBlockIndex === null) return; event.preventDefault(); const targetIndex = Number(target.dataset.blockIndex); const scene = currentScene(); if (targetIndex !== draggedBlockIndex) { const [moved] = scene.blocks.splice(draggedBlockIndex, 1); scene.blocks.splice(targetIndex, 0, moved); selectedBlockIndex = targetIndex; renderScene(); markDirty(); showToast('对白顺序已调整'); } draggedBlockIndex = null; });
 document.addEventListener('dragend', () => { draggedBlockIndex = null; document.querySelectorAll('.script-block').forEach((item) => item.classList.remove('drag-over', 'dragging')); });
-document.addEventListener('click', (event) => { if (!event.target.closest('#workspaceSwitcher') && !event.target.closest('.project-popover')) document.querySelector('.project-popover')?.remove(); });
+document.addEventListener('click', (event) => {
+  const action = event.target.closest('[data-block-action]');
+  if (action) {
+    event.preventDefault();
+    event.stopPropagation();
+    const block = action.closest('.script-block');
+    const index = Number(block?.dataset.blockIndex);
+    if (action.dataset.blockAction === 'move-up') moveBlock(index, -1);
+    if (action.dataset.blockAction === 'move-down') moveBlock(index, 1);
+    if (action.dataset.blockAction === 'delete') deleteBlock(index);
+    return;
+  }
+  if (!event.target.closest('#workspaceSwitcher') && !event.target.closest('.project-popover')) document.querySelector('.project-popover')?.remove();
+});

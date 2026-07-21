@@ -1,0 +1,50 @@
+.block-handle {
+  cursor: grab;
+}
+
+.block-handle:active {
+  cursor: grabbing;
+}
+
+.block-actions {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  display: flex;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity 0.16s;
+}
+
+.script-block:hover .block-actions,
+.script-block.selected .block-actions,
+.block-actions:focus-within {
+  opacity: 1;
+}
+
+.block-action {
+  width: 27px;
+  height: 27px;
+  border: 0;
+  border-radius: 7px;
+  background: #fff4ef;
+  color: #bd7565;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.block-action:hover {
+  background: #ffe3d8;
+  color: #e85f46;
+}
+
+.block-action.delete:hover {
+  background: #ffe0dc;
+  color: #d94736;
+}
+
+.block-action:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
