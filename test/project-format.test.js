@@ -19,6 +19,11 @@ test('损坏或空项目会被补齐为可编辑结构', () => {
   assert.deepEqual(project.chapters[0].scenes[0].blocks, []);
 });
 
+test('自定义项目名称会在项目数据中保留', () => {
+  const project = normalizeProject({ title: '星港调查局' });
+  assert.equal(project.title, '星港调查局');
+});
+
 test('素材只保留项目内相对路径字段', () => {
   const project = normalizeProject({ assets: [{ name: '立绘.png', fileName: 'assets/a.png' }] });
   assert.equal(project.assets[0].relativePath, 'assets/a.png');

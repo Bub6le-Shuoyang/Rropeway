@@ -38,6 +38,7 @@ async function chooseProject() {
   return result.canceled ? null : result.filePaths[0];
 }
 ipcMain.handle('project:new', () => ({ filePath: null, data: clone(DEFAULT_PROJECT) }));
+ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('project:open', async () => {
   const filePath = await chooseProject();
   if (!filePath) return null;

@@ -1,5 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('scriptroom', {
+  getVersion: () => ipcRenderer.invoke('app:get-version'),
   newProject: () => ipcRenderer.invoke('project:new'),
   openProject: () => ipcRenderer.invoke('project:open'),
   openProjectPath: (filePath) => ipcRenderer.invoke('project:open-path', filePath),

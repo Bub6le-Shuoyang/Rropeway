@@ -1,4 +1,5 @@
 const desktopApi = window.scriptroom;
+desktopApi?.getVersion?.().then((version) => { const label = document.getElementById('appVersion'); if (label) label.textContent = `v${version}`; }).catch(() => {});
 const navItems = document.querySelectorAll('.nav-item');
 const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), assets: document.getElementById('assetsView') };
 const toast = document.getElementById('toast');
@@ -168,7 +169,7 @@ function sanitizeRichTextHtml(html) {
   return output.innerHTML;
 }
 function syncCurrentScene() { const scene = currentScene(); if (scene) scene.blocks = captureBlocks(); }
-function captureProject() { syncCurrentScene(); const data = desktopState.data; data.title = document.getElementById('workspaceTitle').textContent.trim(); data.chapters[0] && (data.chapters[0].title = data.chapters[0].title || '第一章'); return data; }
+function captureProject() { syncCurrentScene(); const data = desktopState.data; data.title = String(data.title || document.getElementById('workspaceTitle').textContent || 'Rropeway').trim(); data.chapters[0] && (data.chapters[0].title = data.chapters[0].title || '第一章'); return data; }
 
 function perspectiveCharacterIdAt(index) {
   const blocks = currentScene()?.blocks || [];
@@ -411,7 +412,24 @@ function syncDialogueCreationState() {
   if (!characters.some((character) => character.id === newDialogueCharacterId)) newDialogueCharacterId = '';
   addButton.disabled = !newDialogueCharacterId;
 }
-function applyProject(data, filePath = null) { desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); document.getElementById('workspaceTitle').textContent = data.title; syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setSaveStatus(filePath ? '已打开本地项目' : '本地新项目', filePath ? '刚刚' : '未保存'); }
+function updateProjectTitle(title) {
+  const normalizedTitle = String(title || '').trim() || 'Rropeway';
+  desktopState.data.title = normalizedTitle;
+  document.getElementById('workspaceTitle').textContent = normalizedTitle;
+  document.title = `${normalizedTitle} · Rropeway`;
+  return normalizedTitle;
+}
+async function renameProject() {
+  if (!desktopState.data) return;
+  const title = await requestTextInput('项目名称', desktopState.data.title || 'Rropeway');
+  if (!title?.trim()) return;
+  const normalizedTitle = updateProjectTitle(title);
+  if (desktopState.filePath) rememberProject(desktopState.filePath, normalizedTitle);
+  renderProjectSearchResults();
+  markDirty();
+  showToast(`项目已重命名为「${normalizedTitle}」`);
+}
+function applyProject(data, filePath = null) { desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setSaveStatus(filePath ? '已打开本地项目' : '本地新项目', filePath ? '刚刚' : '未保存'); }
 async function saveProject() { if (!desktopApi) return false; try { const result = await desktopApi.saveProject({ filePath: desktopState.filePath, data: captureProject() }); if (!result) return false; desktopState.filePath = result.filePath; desktopState.data = result.data; rememberProject(result.filePath, result.data.title); desktopState.dirty = false; desktopApi.setDirty(false); localStorage.removeItem('scriptroom-draft'); setSaveStatus('已保存到本地', new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); showToast('项目已保存'); return true; } catch (error) { showToast(error.message || '保存失败'); return false; } }
 async function openProject() { if (desktopState.dirty && !(await requestConfirmation('当前项目有未保存修改，确定打开另一个项目吗？'))) return; try { const result = await desktopApi.openProject(); if (result) { applyProject(result.data, result.filePath); showToast('项目已打开'); } } catch (error) { showToast(error.message || '打开失败'); } }
 async function newProject() { if (desktopState.dirty && !(await requestConfirmation('当前项目有未保存修改，确定新建项目吗？'))) return; const result = await desktopApi.newProject(); applyProject(result.data); showToast('已新建空白项目'); }
@@ -456,7 +474,7 @@ function setWindowProjectMenuOpen(open) {
 }
 function closeWindowProjectMenu() { setWindowProjectMenuOpen(false); }
 document.getElementById('projectMenuButton')?.addEventListener('click', (event) => { event.stopPropagation(); const menu = document.getElementById('windowProjectMenu'); setWindowProjectMenuOpen(Boolean(menu?.hidden)); });
-document.getElementById('newProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); newProject(); }); document.getElementById('openProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); openProject(); }); document.getElementById('saveProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); saveProject(); }); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
+document.getElementById('newProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); newProject(); }); document.getElementById('openProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); openProject(); }); document.getElementById('saveProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); saveProject(); }); document.getElementById('renameProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); renameProject(); }); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
 function applyInterfaceScale(scale, persist = true) {
   const safeScale = [90, 100, 110].includes(Number(scale)) ? Number(scale) : 100;
   document.body.style.zoom = String(safeScale / 100);
@@ -501,6 +519,7 @@ function collectProjectSearchResults(query) {
   if (!normalizedQuery || !desktopState.data) return [];
   const results = [];
   const matches = (...values) => values.some((value) => String(value || '').toLocaleLowerCase().includes(normalizedQuery));
+  if (matches(desktopState.data.title)) results.push({ type: '项目', title: desktopState.data.title, detail: desktopState.filePath || '尚未保存到磁盘', view: 'editor', chapterIndex: activeChapterIndex, sceneIndex: activeSceneIndex });
   (desktopState.data.chapters || []).forEach((chapter, chapterIndex) => {
     if (matches(chapter.title, chapter.status)) results.push({ type: '章节', title: chapter.title, detail: `${chapter.scenes.length} 个场景`, view: 'editor', chapterIndex, sceneIndex: 0 });
     (chapter.scenes || []).forEach((scene, sceneIndex) => {
@@ -550,7 +569,7 @@ function renderProjectSearchResults() {
 document.getElementById('projectSearchInput')?.addEventListener('input', renderProjectSearchResults);
 document.getElementById('projectSearchInput')?.addEventListener('focus', renderProjectSearchResults);
 document.getElementById('previewBtn')?.addEventListener('click', () => { updatePreview(); document.getElementById('previewModal').classList.remove('hidden'); }); document.getElementById('closePreview')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden')); document.querySelector('.modal-backdrop')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden'));
-document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); openApplicationDialog('settings'); } });
+document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); openApplicationDialog('settings'); } });
 applyInterfaceScale(Number(localStorage.getItem('rropeway-interface-scale') || 100), false);
 desktopApi?.onBeforeClose(async () => { const saved = await saveProject(); if (saved) desktopApi.finishClose(); else desktopApi.cancelClose(); });
 setInterval(() => { if (desktopState.dirty && desktopState.data) localStorage.setItem('scriptroom-draft', JSON.stringify({ filePath: desktopState.filePath, data: captureProject(), savedAt: Date.now() })); }, 10000);

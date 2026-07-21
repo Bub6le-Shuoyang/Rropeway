@@ -1,5 +1,7 @@
 # Rropeway Desktop
 
+当前版本：`v0.2.0`
+
 Rropeway 是一个离线的游戏对话脚本编辑器，基于 Electron，面向 Windows 桌面使用。
 
 ## 开发启动

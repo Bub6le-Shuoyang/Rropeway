@@ -798,6 +798,14 @@
   -webkit-app-region: no-drag;
 }
 
+.window-version {
+  margin-left: 6px;
+  color: #b0a8a1;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
 .window-project-menu[hidden],
 .window-project-menu.hidden {
   display: none !important;
@@ -810,6 +818,12 @@
   font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
+}
+
+.window-menu-separator {
+  height: 1px;
+  margin: 5px 7px;
+  background: #eee5df;
 }
 
 .project-search {
