@@ -21,7 +21,7 @@ function projectAssetPath(projectPath, relativePath) {
   return candidate;
 }
 function createWindow() {
-  mainWindow = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 700, frame: false, autoHideMenuBar: true, backgroundColor: '#fffaf5', title: 'Scriptroom · 游戏对话脚本工作台', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  mainWindow = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 700, frame: false, autoHideMenuBar: true, backgroundColor: '#fffaf5', title: 'Rropeway · 游戏对话脚本编辑器', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
   mainWindow.on('close', async (event) => {
     if (closing || !rendererDirty || closeDialogOpen) return;
@@ -34,7 +34,7 @@ function createWindow() {
   });
 }
 async function chooseProject() {
-  const result = await dialog.showOpenDialog(mainWindow, { title: '打开 Scriptroom 项目', properties: ['openFile'], filters: [{ name: 'Scriptroom 项目', extensions: ['scriptroom', 'json'] }] });
+  const result = await dialog.showOpenDialog(mainWindow, { title: '打开 Rropeway 项目', properties: ['openFile'], filters: [{ name: 'Rropeway 项目', extensions: ['scriptroom', 'json'] }] });
   return result.canceled ? null : result.filePaths[0];
 }
 ipcMain.handle('project:new', () => ({ filePath: null, data: clone(DEFAULT_PROJECT) }));
@@ -54,7 +54,7 @@ ipcMain.handle('project:open-path', async (_event, filePath) => {
   const data = normalizeProject(payload?.data);
   let target = payload?.filePath;
   if (!target) {
-    const result = await dialog.showSaveDialog(mainWindow, { title: '保存 Scriptroom 项目', defaultPath: `${data.title || '未命名项目'}.scriptroom`, filters: [{ name: 'Scriptroom 项目', extensions: ['scriptroom'] }] });
+    const result = await dialog.showSaveDialog(mainWindow, { title: '保存 Rropeway 项目', defaultPath: `${data.title || 'Rropeway'}.scriptroom`, filters: [{ name: 'Rropeway 项目', extensions: ['scriptroom'] }] });
     if (result.canceled) return null;
     target = result.filePath;
   }

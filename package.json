@@ -1,5 +1,5 @@
 {
-  "name": "scriptroom-desktop",
+  "name": "rropeway-desktop",
   "version": "0.1.0",
   "description": "离线游戏对话脚本编辑器",
   "main": "main.js",
@@ -15,8 +15,8 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.scriptroom.desktop",
-    "productName": "Scriptroom",
+    "appId": "com.rropeway.desktop",
+    "productName": "Rropeway",
     "directories": {
       "output": "dist"
     },
@@ -33,7 +33,7 @@
           ]
         }
       ],
-      "artifactName": "Scriptroom-Setup-${version}.${ext}"
+      "artifactName": "Rropeway-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -42,5 +42,6 @@
       "createStartMenuShortcut": true
     }
   },
-  "author": "Rropeway"
+  "author": "Rropeway",
+  "productName": "Rropeway"
 }
