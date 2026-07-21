@@ -8,6 +8,7 @@ let activeSceneIndex = 0;
 let selectedBlockIndex = 1;
 let editHistory = [];
 let historyIndex = -1;
+let suppressDeleteConfirmation = false;
 
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('show'), 2400); }
 function setSaveStatus(status, time = '') { document.getElementById('saveStatus').textContent = status; document.getElementById('saveTime').textContent = time; }
@@ -112,7 +113,27 @@ function captureBlocks() {
     if (block.classList.contains('segment-block')) return { type: 'segment', title: block.querySelector('.segment-title')?.textContent.trim() || '未命名分段', perspectiveCharacterId: block.dataset.perspectiveCharacterId || null };
     if (block.classList.contains('narration')) return { type: 'narration', text: block.querySelector('.block-content p')?.textContent.trim() || '' };
     if (block.classList.contains('choice-block')) return { type: 'choice', title: block.querySelector('.choice-title')?.textContent.trim() || '', options: [...block.querySelectorAll('.choices button')].map((item) => item.querySelector('.choice-text')?.textContent.trim() || '') };
-    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '未命名角色', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#f2674f', portraitPreset: block.dataset.portraitPreset || null, statusTag: block.querySelector('.status-pill')?.textContent.trim() || '', voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: block.querySelector('.block-content p')?.textContent.trim() || '', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
+    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '未命名角色', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#f2674f', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: block.querySelector('.block-content p')?.textContent.trim() || '', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
+  });
+}
+function requestDeleteConfirmation(message) {
+  if (suppressDeleteConfirmation) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const overlay = node('div', 'editor-dialog-overlay');
+    const dialog = addChild(overlay, 'div', 'editor-dialog');
+    addChild(dialog, 'h3', '', '确认删除');
+    addChild(dialog, 'p', 'editor-dialog-message', message);
+    const option = addChild(dialog, 'label', 'delete-confirm-option');
+    const checkbox = addChild(option, 'input'); checkbox.type = 'checkbox';
+    addChild(option, 'span', '', '本次工作不再弹出该提示');
+    const actions = addChild(dialog, 'div', 'editor-dialog-actions');
+    const cancel = addChild(actions, 'button', 'file-button', '取消');
+    const confirm = addChild(actions, 'button', 'file-button save', '删除');
+    const close = (value) => { overlay.remove(); resolve(value); };
+    cancel.addEventListener('click', () => close(false));
+    confirm.addEventListener('click', () => { if (checkbox.checked) suppressDeleteConfirmation = true; close(true); });
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) close(false); });
+    document.body.appendChild(overlay);
   });
 }
 function syncCurrentScene() { const scene = currentScene(); if (scene) scene.blocks = captureBlocks(); }
@@ -149,10 +170,11 @@ function createBlockElement(block, index) {
     (block.options || []).forEach((option) => { const button = addChild(choices, 'button'); addChild(button, 'span', 'choice-text', option); addChild(button, 'span', '', '→'); });
   } else {
     const character = (desktopState.data?.characters || []).find((item) => item.id === block.characterId || item.name === block.character);
+    if (!Array.isArray(block.statusTags)) block.statusTags = [block.statusTag || block.emotion || ''].map((tag) => String(tag).trim()).filter(Boolean);
     const isPerspective = perspectiveCharacterIdAt(index) && perspectiveCharacterIdAt(index) === (block.characterId || character?.id);
     if (isPerspective) wrapper.classList.add('pov-dialogue');
     const thumb = addChild(wrapper, 'div', 'character-thumb', (block.character || '未').slice(0, 1)); thumb.style.background = block.characterColor || character?.color || '#f2674f';
-    const meta = addChild(content, 'div', 'dialogue-meta'); const nameNode = addChild(meta, 'span', 'character-name', block.character); nameNode.style.color = block.characterColor || character?.color || '#f2674f'; if (isPerspective) addChild(meta, 'span', 'pov-pill', '主视角'); if (block.statusTag) addChild(meta, 'span', 'status-pill', block.statusTag); addChild(meta, 'span', 'voice-pill', `♪ ${block.voice || '未设定'}`);
+    const meta = addChild(content, 'div', 'dialogue-meta'); const nameNode = addChild(meta, 'span', 'character-name', block.character); nameNode.style.color = block.characterColor || character?.color || '#f2674f'; if (isPerspective) addChild(meta, 'span', 'pov-pill', '主视角'); (block.statusTags || []).forEach((statusTag) => addChild(meta, 'span', 'status-pill', statusTag)); addChild(meta, 'span', 'voice-pill', `♪ ${block.voice || '未设定'}`);
     addChild(content, 'p', '', block.text);
     if (block.note) addChild(content, 'div', 'block-note', `注：${block.note}`);
     if (block.portrait) wrapper.dataset.portrait = block.portrait; if (block.portraitPreset) wrapper.dataset.portraitPreset = block.portraitPreset; if (block.characterId || character?.id) wrapper.dataset.characterId = block.characterId || character.id; wrapper.dataset.characterColor = block.characterColor || character?.color || '#f2674f';
@@ -270,7 +292,7 @@ function updatePreview() {
 }
 
 navItems.forEach((item) => item.addEventListener('click', () => { const target = item.dataset.view; navItems.forEach((nav) => nav.classList.toggle('active', nav === item)); document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor'); views.characters.classList.toggle('hidden', target !== 'characters'); views.assets.classList.toggle('hidden', target !== 'assets'); document.querySelector('.breadcrumb span').textContent = target === 'characters' ? '角色与立绘' : target === 'assets' ? '素材库' : '剧本编辑器'; if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets(); }));
-document.addEventListener('click', (event) => { const block = event.target.closest('.script-block'); if (block) { selectedBlockIndex = Number(block.dataset.blockIndex || 0); document.querySelectorAll('.script-block').forEach((item) => item.classList.toggle('selected', item === block)); renderInspector(); } if (event.target.closest('#addDialogue')) { syncCurrentScene(); const characterId = document.getElementById('dialogueCharacterSelect')?.value; const character = desktopState.data.characters?.find((item) => item.id === characterId); if (!character) { showToast('请先选择一个角色'); return; } currentScene().blocks.push({ type: 'dialogue', character: character.name, characterId: character.id, characterKey: 'mei', characterColor: character.color || '#f2674f', portraitPreset: character.portraitPreset || null, statusTag: '', voice: '', text: '' }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] p`)?.focus(); markDirty(); showToast('已添加一条对白'); } if (event.target.closest('#addSegment')) { syncCurrentScene(); const segmentNumber = currentScene().blocks.filter((item) => item.type === 'segment').length + 1; currentScene().blocks.push({ type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); markDirty(); showToast('已添加分段'); } });
+document.addEventListener('click', (event) => { const block = event.target.closest('.script-block'); if (block) { selectedBlockIndex = Number(block.dataset.blockIndex || 0); document.querySelectorAll('.script-block').forEach((item) => item.classList.toggle('selected', item === block)); renderInspector(); } if (event.target.closest('#addDialogue')) { syncCurrentScene(); const characterId = document.getElementById('dialogueCharacterSelect')?.value; const character = desktopState.data.characters?.find((item) => item.id === characterId); if (!character) { showToast('请先选择一个角色'); return; } currentScene().blocks.push({ type: 'dialogue', character: character.name, characterId: character.id, characterKey: 'mei', characterColor: character.color || '#f2674f', portraitPreset: character.portraitPreset || null, statusTags: [], voice: '', text: '' }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] p`)?.focus(); markDirty(); showToast('已添加一条对白'); } if (event.target.closest('#addSegment')) { syncCurrentScene(); const segmentNumber = currentScene().blocks.filter((item) => item.type === 'segment').length + 1; currentScene().blocks.push({ type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); markDirty(); showToast('已添加分段'); } });
 document.getElementById('dialogueCharacterSelect')?.addEventListener('change', (event) => { document.getElementById('addDialogue').disabled = !event.target.value; });
 document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { editHistory = editHistory.slice(0, historyIndex + 1); editHistory.push([...document.querySelectorAll('[contenteditable="true"]')].map((item) => item.textContent)); historyIndex = editHistory.length - 1; markDirty(); } });
 document.querySelector('[title="撤销"]')?.addEventListener('click', () => { if (historyIndex > 0) { historyIndex -= 1; document.querySelectorAll('[contenteditable="true"]').forEach((item, index) => { item.textContent = editHistory[historyIndex][index] ?? item.textContent; }); markDirty(); } });
@@ -312,9 +334,25 @@ function renderInspector() {
   if (!characters.length) { const option = addChild(characterSelect, 'option', '', '暂无角色，请先创建'); option.disabled = true; }
   characterSelect.addEventListener('change', () => { const character = characters.find((item) => item.id === characterSelect.value); if (!character) return; applyCharacterToBlock(character, block); renderScene(); renderInspector(); markDirty(); });
   const statusGroup = addChild(body, 'div', 'property-group'); addChild(statusGroup, 'label', '', '状态标签');
-  const statusInput = addChild(statusGroup, 'input', 'select-control editor-input'); statusInput.value = block.statusTag || ''; statusInput.placeholder = '可选，例如：压低声音';
-  statusInput.addEventListener('input', () => { block.statusTag = statusInput.value; markDirty(); });
-  statusInput.addEventListener('change', () => renderScene());
+  const statusEditor = addChild(statusGroup, 'div', 'status-tag-editor');
+  (block.statusTags || []).forEach((statusTag, tagIndex) => {
+    const chip = addChild(statusEditor, 'span', 'status-tag-chip'); addChild(chip, 'span', '', statusTag);
+    const removeTag = addChild(chip, 'button', '', '×'); removeTag.type = 'button'; removeTag.title = '删除标签';
+    removeTag.addEventListener('click', () => { block.statusTags.splice(tagIndex, 1); renderScene(); markDirty(); });
+  });
+  const statusInput = addChild(statusEditor, 'input', 'status-tag-input'); statusInput.placeholder = '输入后按回车或点击其他位置';
+  const commitStatusTag = (refocus) => {
+    const value = statusInput.value.trim();
+    if (!value) return;
+    block.statusTags ||= [];
+    if (block.statusTags.includes(value)) { statusInput.value = ''; return; }
+    block.statusTags.push(value);
+    renderScene();
+    markDirty();
+    if (refocus) requestAnimationFrame(() => document.querySelector('.status-tag-input')?.focus());
+  };
+  statusInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); commitStatusTag(true); } });
+  statusInput.addEventListener('blur', () => setTimeout(() => commitStatusTag(false), 0));
   const voiceGroup = addChild(body, 'div', 'property-group'); addChild(voiceGroup, 'label', '', '语音提示'); const voiceSelect = addChild(voiceGroup, 'select', 'select-control editor-select'); ['女声 · 轻', '女声 · 强', '男声 · 低', '男声 · 清晰', '无语音'].forEach((voice) => { const option = addChild(voiceSelect, 'option', '', voice); option.value = voice; option.selected = block.voice === voice; }); voiceSelect.addEventListener('change', () => { block.voice = voiceSelect.value; renderScene(); renderInspector(); markDirty(); });
   const assetGroup = addChild(body, 'div', 'property-group');
   addChild(assetGroup, 'label', '', '当前立绘');
@@ -464,7 +502,7 @@ async function deleteBlock(index) {
   syncCurrentScene();
   const scene = currentScene();
   if (!scene?.blocks?.[index]) return;
-  if (!(await requestConfirmation('\u786e\u5b9a\u5220\u9664\u8fd9\u6761\u5185\u5bb9\u5417\uff1f\u6b64\u64cd\u4f5c\u65e0\u6cd5\u76f4\u63a5\u64a4\u9500\u3002'))) return;
+  if (!(await requestDeleteConfirmation('确定删除这条内容吗？此操作无法直接撤销。'))) return;
   scene.blocks.splice(index, 1);
   selectedBlockIndex = Math.min(index, Math.max(0, scene.blocks.length - 1));
   renderScene();

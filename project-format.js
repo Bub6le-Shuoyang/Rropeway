@@ -17,7 +17,9 @@ function normalizeBlock(block) {
   if (value.type === 'choice') return { type: 'choice', title: String(value.title || ''), options: Array.isArray(value.options) ? value.options.map(String) : [] };
   if (value.type === 'narration') return { type: 'narration', text: String(value.text || '') };
   if (value.type === 'segment') return { type: 'segment', title: String(value.title || '未命名分段'), perspectiveCharacterId: value.perspectiveCharacterId ? String(value.perspectiveCharacterId) : null };
-  return { type: 'dialogue', character: String(value.character || '未命名角色'), characterId: value.characterId ? String(value.characterId) : '', characterKey: value.characterKey === 'yan' ? 'yan' : 'mei', characterColor: String(value.characterColor || '#f2674f'), portraitPreset: value.portraitPreset ? String(value.portraitPreset) : null, statusTag: String(value.statusTag ?? value.emotion ?? ''), voice: String(value.voice || ''), text: String(value.text || ''), note: String(value.note || ''), portrait: value.portrait ? String(value.portrait) : undefined };
+  const legacyStatusTag = String(value.statusTag ?? value.emotion ?? '').trim();
+  const statusTags = (Array.isArray(value.statusTags) ? value.statusTags : legacyStatusTag ? [legacyStatusTag] : []).map((tag) => String(tag).trim()).filter((tag, index, tags) => tag && tags.indexOf(tag) === index);
+  return { type: 'dialogue', character: String(value.character || '未命名角色'), characterId: value.characterId ? String(value.characterId) : '', characterKey: value.characterKey === 'yan' ? 'yan' : 'mei', characterColor: String(value.characterColor || '#f2674f'), portraitPreset: value.portraitPreset ? String(value.portraitPreset) : null, statusTags, voice: String(value.voice || ''), text: String(value.text || ''), note: String(value.note || ''), portrait: value.portrait ? String(value.portrait) : undefined };
 }
 function normalizeCharacter(character, index) {
   const value = character && typeof character === 'object' ? character : {};
