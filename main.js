@@ -2,89 +2,94 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { DEFAULT_PROJECT, clone, normalizeProject } = require('./project-format');
 
 let mainWindow;
+let rendererDirty = false;
+let closing = false;
+let closeDialogOpen = false;
 
-const defaultProject = {
-  format: 'scriptroom-project',
-  version: 1,
-  title: '《雾港来信》',
-  chapters: [
-    {
-      id: 'chapter-1', title: '潮汐之后', status: '进行中',
-      scenes: [{ id: 'scene-4', number: '04', title: '灯塔边', blocks: [
-        { type: 'narration', text: '暮色沉入海面。灯塔的光一圈圈扫过潮湿的石阶，远处传来汽笛声。' },
-        { type: 'dialogue', character: '沈知微', characterKey: 'mei', emotion: '克制', voice: '女声 · 轻', text: '你还是来了。', note: '语气不要有责备，更像是早就知道他会出现。' },
-        { type: 'dialogue', character: '顾言川', characterKey: 'yan', emotion: '迟疑', voice: '男声 · 低', text: '我以为你不会再等我。' },
-        { type: 'choice', title: '知微会怎么回答？', options: ['“我只是在等一个解释。”', '“这里风太大了，我先走了。”'] }
-      ] }]
-    }
-  ],
-  characters: [],
-  assets: [],
-  updatedAt: new Date().toISOString()
-};
-
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1440, height: 920, minWidth: 1024, minHeight: 700,
-    backgroundColor: '#fffaf5',
-    title: 'Scriptroom · 游戏对话脚本工作台',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
-  });
-  mainWindow.loadFile(path.join(__dirname, 'index.html'));
+function isInside(parent, candidate) {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
-
-async function chooseProjectPath(mode) {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: mode === 'open' ? '打开 Scriptroom 项目' : '选择项目目录',
-    properties: mode === 'open' ? ['openFile'] : ['openDirectory'],
-    filters: mode === 'open' ? [{ name: 'Scriptroom 项目', extensions: ['scriptroom', 'json'] }] : undefined
+function projectAssetPath(projectPath, relativePath) {
+  if (!projectPath || !relativePath) throw new Error('素材路径无效');
+  const baseDir = path.dirname(projectPath);
+  const candidate = path.resolve(baseDir, relativePath);
+  if (!isInside(baseDir, candidate)) throw new Error('素材路径不在项目目录内');
+  return candidate;
+}
+function createWindow() {
+  mainWindow = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 700, frame: false, autoHideMenuBar: true, backgroundColor: '#fffaf5', title: 'Scriptroom · 游戏对话脚本工作台', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  mainWindow.loadFile(path.join(__dirname, 'index.html'));
+  mainWindow.on('close', async (event) => {
+    if (closing || !rendererDirty || closeDialogOpen) return;
+    event.preventDefault();
+    closeDialogOpen = true;
+    const result = await dialog.showMessageBox(mainWindow, { type: 'warning', title: '项目尚未保存', message: '当前项目有未保存的修改。', buttons: ['保存并退出', '不保存退出', '取消'], defaultId: 0, cancelId: 2, noLink: true });
+    closeDialogOpen = false;
+    if (result.response === 0) mainWindow.webContents.send('app:before-close');
+    if (result.response === 1) { closing = true; mainWindow.close(); }
   });
+}
+async function chooseProject() {
+  const result = await dialog.showOpenDialog(mainWindow, { title: '打开 Scriptroom 项目', properties: ['openFile'], filters: [{ name: 'Scriptroom 项目', extensions: ['scriptroom', 'json'] }] });
   return result.canceled ? null : result.filePaths[0];
 }
-
-ipcMain.handle('project:new', () => ({ filePath: null, data: structuredClone(defaultProject) }));
+ipcMain.handle('project:new', () => ({ filePath: null, data: clone(DEFAULT_PROJECT) }));
 ipcMain.handle('project:open', async () => {
-  const filePath = await chooseProjectPath('open');
+  const filePath = await chooseProject();
   if (!filePath) return null;
-  try { return { filePath, data: JSON.parse(await fs.readFile(filePath, 'utf8')) }; }
-  catch (error) { throw new Error(`项目文件无法读取：${error.message}`); }
+  try {
+    const data = normalizeProject(JSON.parse(await fs.readFile(filePath, 'utf8')));
+    return { filePath, data };
+  } catch (error) { throw new Error(`项目文件无法读取：${error.message}`); }
 });
-ipcMain.handle('project:save', async (_event, { filePath, data }) => {
-  let target = filePath;
+ipcMain.handle('project:save', async (_event, payload) => {
+  const data = normalizeProject(payload?.data);
+  let target = payload?.filePath;
   if (!target) {
     const result = await dialog.showSaveDialog(mainWindow, { title: '保存 Scriptroom 项目', defaultPath: `${data.title || '未命名项目'}.scriptroom`, filters: [{ name: 'Scriptroom 项目', extensions: ['scriptroom'] }] });
     if (result.canceled) return null;
     target = result.filePath;
   }
+  if (!target.toLowerCase().endsWith('.scriptroom')) target += '.scriptroom';
   const normalized = { ...data, updatedAt: new Date().toISOString() };
-  await fs.writeFile(target, JSON.stringify(normalized, null, 2), 'utf8');
+  const tempPath = `${target}.${process.pid}.tmp`;
+  const backupPath = `${target}.backup`;
+  await fs.writeFile(tempPath, JSON.stringify(normalized, null, 2), 'utf8');
+  try { await fs.copyFile(target, backupPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await fs.rm(target, { force: true });
+  await fs.rename(tempPath, target);
+  rendererDirty = false;
   return { filePath: target, data: normalized };
 });
 ipcMain.handle('asset:import', async (_event, { projectPath }) => {
+  if (!projectPath) throw new Error('请先保存项目，再导入素材');
   const result = await dialog.showOpenDialog(mainWindow, { title: '导入本地素材', properties: ['openFile', 'multiSelections'], filters: [{ name: '图片与音频', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp3', 'wav', 'ogg'] }] });
   if (result.canceled) return [];
-  const baseDir = projectPath ? path.dirname(projectPath) : app.getPath('documents');
-  const assetDir = path.join(baseDir, 'assets');
+  const assetDir = path.join(path.dirname(projectPath), 'assets');
   await fs.mkdir(assetDir, { recursive: true });
   const imported = [];
   for (const source of result.filePaths) {
     const safeName = `${crypto.randomUUID()}-${path.basename(source).replace(/[^\w.\-\u4e00-\u9fff]/g, '_')}`;
-    const destination = path.join(assetDir, safeName);
-    await fs.copyFile(source, destination);
-    imported.push({ id: crypto.randomUUID(), name: path.basename(source), fileName: safeName, type: path.extname(source).slice(1).toLowerCase(), path: destination });
+    await fs.copyFile(source, path.join(assetDir, safeName));
+    imported.push({ id: crypto.randomUUID(), name: path.basename(source), fileName: safeName, relativePath: path.join('assets', safeName).replaceAll('\\', '/'), type: path.extname(source).slice(1).toLowerCase() });
   }
   return imported;
 });
-ipcMain.handle('asset:read', async (_event, filePath) => {
-  const extension = path.extname(filePath).toLowerCase();
-  const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }[extension];
+ipcMain.handle('asset:read', async (_event, { projectPath, relativePath }) => {
+  const filePath = projectAssetPath(projectPath, relativePath);
+  const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }[path.extname(filePath).toLowerCase()];
   if (!mime) return null;
-  const buffer = await fs.readFile(filePath);
-  return `data:${mime};base64,${buffer.toString('base64')}`;
+  return `data:${mime};base64;${(await fs.readFile(filePath)).toString('base64')}`.replace('base64;', 'base64,');
 });
-ipcMain.handle('shell:show-item', (_event, filePath) => shell.showItemInFolder(filePath));
-
+ipcMain.handle('shell:show-item', async (_event, { projectPath, relativePath }) => shell.showItemInFolder(projectAssetPath(projectPath, relativePath)));
+ipcMain.on('window:set-dirty', (_event, dirty) => { rendererDirty = Boolean(dirty); });
+ipcMain.on('window:minimize', () => mainWindow.minimize());
+ipcMain.on('window:toggle-maximize', () => { if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize(); });
+ipcMain.on('window:close', () => mainWindow.close());
+ipcMain.on('window:close-result', (_event, result) => { if (result === 'saved' || result === 'discard') { closing = true; mainWindow.close(); } });
 app.whenReady().then(() => { createWindow(); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); }); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

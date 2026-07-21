@@ -5,9 +5,42 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "test": "node --test"
   },
   "devDependencies": {
-    "electron": "^31.0.0"
-  }
+    "electron": "^31.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.scriptroom.desktop",
+    "productName": "Scriptroom",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/.cache/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Scriptroom-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "author": "Rropeway"
 }
