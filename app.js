@@ -236,12 +236,14 @@ function renderChapters() {
   const list = document.getElementById('chapterList');
   list.replaceChildren();
   (desktopState.data?.chapters || []).forEach((chapter, index) => {
-    const entry = addChild(list, 'div', 'chapter-entry');
+    const treeNode = addChild(list, 'div', 'chapter-tree-node');
+    const entry = addChild(treeNode, 'div', 'chapter-entry');
+    addChild(entry, 'span', 'chapter-tree-branch');
     const button = addChild(entry, 'button', `chapter${index === activeChapterIndex ? ' active' : ''}`);
-    addChild(button, 'span', 'chapter-number', String(index + 1).padStart(2, '0'));
+    addChild(button, 'span', 'chapter-folder-icon', index === activeChapterIndex ? '▾' : '▸');
     const copy = addChild(button, 'span');
     addChild(copy, 'b', '', chapter.title);
-    addChild(copy, 'small', '', `${chapter.scenes.length} 个场景 · ${chapter.status}`);
+    addChild(copy, 'small', '', `${chapter.scenes.length} 个场景`);
     const rename = addChild(entry, 'button', 'chapter-rename', '✎');
     rename.title = '修改章节名称';
     button.addEventListener('click', () => {
@@ -262,6 +264,24 @@ function renderChapters() {
       if (index === activeChapterIndex) renderScene();
       markDirty();
     });
+    if (index === activeChapterIndex) {
+      const sceneList = addChild(treeNode, 'div', 'chapter-scene-list');
+      chapter.scenes.forEach((scene, sceneIndex) => {
+        const sceneButton = addChild(sceneList, 'button', `chapter-scene-file${sceneIndex === activeSceneIndex ? ' active' : ''}`);
+        addChild(sceneButton, 'span', 'scene-file-icon', '◇');
+        addChild(sceneButton, 'span', 'scene-file-name', `${scene.number} · ${scene.title}`);
+        sceneButton.addEventListener('click', () => {
+          syncCurrentScene();
+          activeChapterIndex = index;
+          activeSceneIndex = sceneIndex;
+          selectedBlockIndex = 0;
+          renderChapters();
+          renderSceneTabs();
+          renderScene();
+          document.querySelector('[data-view="editor"]').click();
+        });
+      });
+    }
   });
 }
 
