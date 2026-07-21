@@ -299,6 +299,26 @@ async function deleteScene(chapterIndex, sceneIndex) {
   finishTreeMutation(activeChapterId, keepSceneId, '场景已删除');
 }
 function clearTreeDragState() { draggedChapterId = null; draggedSceneInfo = null; document.querySelectorAll('.chapter-tree-node,.chapter-scene-entry').forEach((item) => item.classList.remove('dragging', 'drag-over')); }
+async function renameChapterAt(chapterIndex) {
+  const chapter = desktopState.data.chapters[chapterIndex];
+  if (!chapter) return;
+  const title = await requestTextInput('章节名称', chapter.title);
+  if (!title) return;
+  chapter.title = title;
+  renderChapters();
+  if (chapterIndex === activeChapterIndex) renderScene();
+  markDirty();
+}
+async function renameSceneAt(chapterIndex, sceneIndex) {
+  const scene = desktopState.data.chapters[chapterIndex]?.scenes?.[sceneIndex];
+  if (!scene) return;
+  const title = await requestTextInput('场景名称', scene.title);
+  if (!title) return;
+  scene.title = title;
+  renderChapters();
+  if (chapterIndex === activeChapterIndex) { renderSceneTabs(); renderScene(); }
+  markDirty();
+}
 function renderChapters() {
   const list = document.getElementById('chapterList');
   list.replaceChildren();
@@ -306,16 +326,12 @@ function renderChapters() {
     const isExpanded = expandedChapterIds.has(chapter.id);
     const treeNode = addChild(list, 'div', 'chapter-tree-node');
     const entry = addChild(treeNode, 'div', 'chapter-entry');
-    addChild(entry, 'span', 'chapter-tree-branch');
+    const dragHandle = addChild(entry, 'span', 'chapter-drag-handle', '⠿'); dragHandle.draggable = true; dragHandle.title = '拖动章节';
     const toggle = addChild(entry, 'button', 'chapter-tree-toggle', isExpanded ? '▾' : '▸'); toggle.type = 'button'; toggle.title = isExpanded ? '折叠章节' : '展开章节';
     const button = addChild(entry, 'button', `chapter${index === activeChapterIndex ? ' active' : ''}`);
     addChild(button, 'span', 'chapter-folder-icon', '▤');
-    const copy = addChild(button, 'span');
-    addChild(copy, 'b', '', chapter.title);
-    addChild(copy, 'small', '', `${chapter.scenes.length} 个场景`);
-    const dragHandle = addChild(entry, 'span', 'chapter-drag-handle', '⠿'); dragHandle.draggable = true; dragHandle.title = '拖动章节';
-    const rename = addChild(entry, 'button', 'chapter-rename', '✎');
-    rename.title = '修改章节名称';
+    addChild(button, 'b', '', chapter.title);
+    addChild(entry, 'span', 'chapter-scene-count', String(chapter.scenes.length));
     toggle.addEventListener('click', () => { if (isExpanded) expandedChapterIds.delete(chapter.id); else expandedChapterIds.add(chapter.id); renderChapters(); });
     button.addEventListener('click', () => {
       syncCurrentScene();
@@ -329,15 +345,11 @@ function renderChapters() {
       renderScene();
       document.querySelector('[data-view="editor"]').click();
     });
-    rename.addEventListener('click', async () => {
-      const title = await requestTextInput('章节名称', chapter.title);
-      if (!title) return;
-      chapter.title = title;
-      renderChapters();
-      if (index === activeChapterIndex) renderScene();
-      markDirty();
-    });
-    entry.addEventListener('contextmenu', (event) => openTreeContextMenu(event, [{ label: '删除章节', danger: true, action: () => deleteChapter(index) }]));
+    button.addEventListener('dblclick', (event) => { event.preventDefault(); renameChapterAt(index); });
+    entry.addEventListener('contextmenu', (event) => openTreeContextMenu(event, [
+      { label: '重命名章节', action: () => renameChapterAt(index) },
+      { label: '删除章节', danger: true, action: () => deleteChapter(index) }
+    ]));
     dragHandle.addEventListener('dragstart', (event) => { event.stopPropagation(); draggedChapterId = chapter.id; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', chapter.id); treeNode.classList.add('dragging'); });
     dragHandle.addEventListener('dragend', clearTreeDragState);
     treeNode.addEventListener('dragover', (event) => { if (!draggedChapterId && !draggedSceneInfo) return; event.preventDefault(); event.stopPropagation(); treeNode.classList.add('drag-over'); });
@@ -347,10 +359,11 @@ function renderChapters() {
       const sceneList = addChild(treeNode, 'div', 'chapter-scene-list');
       chapter.scenes.forEach((scene, sceneIndex) => {
         const sceneEntry = addChild(sceneList, 'div', 'chapter-scene-entry');
-        const sceneButton = addChild(sceneEntry, 'button', `chapter-scene-file${index === activeChapterIndex && sceneIndex === activeSceneIndex ? ' active' : ''}`);
-        addChild(sceneButton, 'span', 'scene-file-icon', '◇');
-        addChild(sceneButton, 'span', 'scene-file-name', `${scene.number} · ${scene.title}`);
         const sceneDragHandle = addChild(sceneEntry, 'span', 'scene-drag-handle', '⠿'); sceneDragHandle.draggable = true; sceneDragHandle.title = '拖动场景';
+        const sceneButton = addChild(sceneEntry, 'button', `chapter-scene-file${index === activeChapterIndex && sceneIndex === activeSceneIndex ? ' active' : ''}`);
+        addChild(sceneButton, 'span', 'scene-file-icon', '▱');
+        addChild(sceneButton, 'span', 'scene-file-name', scene.title);
+        addChild(sceneButton, 'span', 'scene-file-number', scene.number);
         sceneButton.addEventListener('click', () => {
           syncCurrentScene();
           expandedChapterIds.add(chapter.id);
@@ -362,7 +375,11 @@ function renderChapters() {
           renderScene();
           document.querySelector('[data-view="editor"]').click();
         });
-        sceneEntry.addEventListener('contextmenu', (event) => openTreeContextMenu(event, [{ label: '删除场景', danger: true, action: () => deleteScene(index, sceneIndex) }]));
+        sceneButton.addEventListener('dblclick', (event) => { event.preventDefault(); renameSceneAt(index, sceneIndex); });
+        sceneEntry.addEventListener('contextmenu', (event) => openTreeContextMenu(event, [
+          { label: '重命名场景', action: () => renameSceneAt(index, sceneIndex) },
+          { label: '删除场景', danger: true, action: () => deleteScene(index, sceneIndex) }
+        ]));
         sceneDragHandle.addEventListener('dragstart', (event) => { event.stopPropagation(); draggedSceneInfo = { chapterId: chapter.id, sceneId: scene.id }; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', scene.id); sceneEntry.classList.add('dragging'); });
         sceneDragHandle.addEventListener('dragend', clearTreeDragState);
         sceneEntry.addEventListener('dragover', (event) => { if (!draggedSceneInfo) return; event.preventDefault(); event.stopPropagation(); sceneEntry.classList.add('drag-over'); });
@@ -376,7 +393,7 @@ function renderChapters() {
 function renderImportedAssets() {
   const grid = document.querySelector('.asset-grid'); grid.querySelectorAll('[data-imported="true"]').forEach((item) => item.remove());
   (desktopState.data?.assets || []).forEach((asset) => {
-    const card = node('div', 'asset-card imported-asset'); card.dataset.imported = 'true';
+    const card = node('div', 'asset-card imported-asset'); card.dataset.imported = 'true'; card.dataset.assetId = asset.id;
     const kind = ['mp3', 'wav', 'ogg'].includes(asset.type) ? '音效' : '图片'; addChild(card, 'span', '', kind); addChild(card, 'b', '', asset.name);
     const actions = addChild(card, 'div', 'asset-actions');
     if (kind === '图片') { const background = addChild(actions, 'button', 'asset-action', '设为背景'); background.addEventListener('click', () => bindAsset(asset, 'background')); const portrait = addChild(actions, 'button', 'asset-action', '设为立绘'); portrait.addEventListener('click', () => bindAsset(asset, 'portrait')); }
@@ -430,11 +447,111 @@ document.addEventListener('input', (event) => { if (event.target.closest('[conte
 document.querySelector('[title="撤销"]')?.addEventListener('click', () => { if (historyIndex > 0) { historyIndex -= 1; document.querySelectorAll('[contenteditable="true"]').forEach((item, index) => { item.innerHTML = editHistory[historyIndex][index] ?? item.innerHTML; }); markDirty(); } });
 document.querySelector('[title="重做"]')?.addEventListener('click', () => { if (historyIndex < editHistory.length - 1) { historyIndex += 1; document.querySelectorAll('[contenteditable="true"]').forEach((item, index) => { item.innerHTML = editHistory[historyIndex][index] ?? item.innerHTML; }); markDirty(); } });
 document.getElementById('addChapter')?.addEventListener('click', () => { const chapters = desktopState.data.chapters; const chapterNumber = chapters.length + 1; const chapter = { id: `chapter-${Date.now()}`, title: `未命名章节 ${chapterNumber}`, status: '草稿', scenes: [{ id: `scene-${Date.now()}`, number: '01', title: '未命名场景', blocks: [] }] }; chapters.push(chapter); expandedChapterIds.add(chapter.id); activeChapterIndex = chapters.length - 1; activeSceneIndex = 0; renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]').click(); markDirty(); showToast('已添加新章节'); });
-function closeWindowProjectMenu() { document.getElementById('windowProjectMenu')?.classList.add('hidden'); }
-document.getElementById('projectMenuButton')?.addEventListener('click', (event) => { event.stopPropagation(); document.getElementById('windowProjectMenu')?.classList.toggle('hidden'); });
+function setWindowProjectMenuOpen(open) {
+  const menu = document.getElementById('windowProjectMenu'); const button = document.getElementById('projectMenuButton');
+  if (!menu || !button) return;
+  menu.hidden = !open;
+  menu.classList.toggle('hidden', !open);
+  button.setAttribute('aria-expanded', String(open));
+}
+function closeWindowProjectMenu() { setWindowProjectMenuOpen(false); }
+document.getElementById('projectMenuButton')?.addEventListener('click', (event) => { event.stopPropagation(); const menu = document.getElementById('windowProjectMenu'); setWindowProjectMenuOpen(Boolean(menu?.hidden)); });
 document.getElementById('newProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); newProject(); }); document.getElementById('openProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); openProject(); }); document.getElementById('saveProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); saveProject(); }); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
+function applyInterfaceScale(scale, persist = true) {
+  const safeScale = [90, 100, 110].includes(Number(scale)) ? Number(scale) : 100;
+  document.body.style.zoom = String(safeScale / 100);
+  if (persist) localStorage.setItem('rropeway-interface-scale', String(safeScale));
+}
+function openApplicationDialog(type) {
+  document.querySelector('.application-dialog-overlay')?.remove();
+  const overlay = addChild(document.body, 'div', 'editor-dialog-overlay application-dialog-overlay');
+  const dialog = addChild(overlay, 'div', 'editor-dialog application-dialog');
+  const header = addChild(dialog, 'div', 'application-dialog-header');
+  addChild(header, 'h3', '', type === 'settings' ? '设置' : '帮助与快捷键');
+  const close = addChild(header, 'button', 'application-dialog-close', '×'); close.type = 'button'; close.title = '关闭';
+  const body = addChild(dialog, 'div', 'application-dialog-body');
+  if (type === 'settings') {
+    addChild(body, 'p', 'application-dialog-description', '调整本机编辑器的显示比例。设置只保存在当前电脑。');
+    const section = addChild(body, 'section', 'settings-section');
+    addChild(section, 'b', '', '界面大小');
+    const choices = addChild(section, 'div', 'setting-choice-row');
+    const current = Number(localStorage.getItem('rropeway-interface-scale') || 100);
+    [{ value: 90, label: '紧凑' }, { value: 100, label: '标准' }, { value: 110, label: '宽松' }].forEach((option) => {
+      const button = addChild(choices, 'button', `setting-choice${current === option.value ? ' active' : ''}`, option.label); button.type = 'button';
+      button.addEventListener('click', () => { applyInterfaceScale(option.value); choices.querySelectorAll('button').forEach((item) => item.classList.toggle('active', item === button)); });
+    });
+  } else {
+    addChild(body, 'p', 'application-dialog-description', '常用操作均可通过键盘或章节树完成。');
+    const shortcuts = addChild(body, 'div', 'shortcut-list');
+    [['全项目搜索', 'Ctrl + K'], ['新建项目', 'Ctrl + N'], ['打开项目', 'Ctrl + O'], ['保存项目', 'Ctrl + S'], ['打开设置', 'Ctrl + ,'], ['重命名章节或场景', '双击名称'], ['管理章节或场景', '右键菜单'], ['调整章节或场景顺序', '拖动左侧圆点']].forEach(([label, keys]) => {
+      const row = addChild(shortcuts, 'div', 'shortcut-row'); addChild(row, 'span', '', label); addChild(row, 'kbd', '', keys);
+    });
+  }
+  const dismiss = () => overlay.remove();
+  close.addEventListener('click', dismiss);
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) dismiss(); });
+}
+document.getElementById('windowSettingsButton')?.addEventListener('click', () => { closeWindowProjectMenu(); openApplicationDialog('settings'); });
+document.getElementById('windowHelpButton')?.addEventListener('click', () => { closeWindowProjectMenu(); openApplicationDialog('help'); });
+function projectSearchText(value) {
+  const container = document.createElement('div'); container.innerHTML = String(value || ''); return (container.textContent || '').replace(/\s+/g, ' ').trim();
+}
+function collectProjectSearchResults(query) {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery || !desktopState.data) return [];
+  const results = [];
+  const matches = (...values) => values.some((value) => String(value || '').toLocaleLowerCase().includes(normalizedQuery));
+  (desktopState.data.chapters || []).forEach((chapter, chapterIndex) => {
+    if (matches(chapter.title, chapter.status)) results.push({ type: '章节', title: chapter.title, detail: `${chapter.scenes.length} 个场景`, view: 'editor', chapterIndex, sceneIndex: 0 });
+    (chapter.scenes || []).forEach((scene, sceneIndex) => {
+      if (matches(scene.title, scene.number)) results.push({ type: '场景', title: scene.title, detail: chapter.title, view: 'editor', chapterIndex, sceneIndex });
+      (scene.blocks || []).forEach((block, blockIndex) => {
+        const text = projectSearchText(block.textHtml || block.text || block.title || '');
+        const tags = (block.statusTags || []).join(' ');
+        if (!matches(text, block.character, tags, block.note)) return;
+        results.push({ type: block.type === 'segment' ? '分段' : '对白', title: text || block.character || '未命名内容', detail: `${chapter.title} / ${scene.title}${block.character ? ` · ${block.character}` : ''}`, view: 'editor', chapterIndex, sceneIndex, blockIndex });
+      });
+    });
+  });
+  (desktopState.data.characters || []).forEach((character) => { if (matches(character.name, character.role, character.description)) results.push({ type: '角色', title: character.name, detail: character.role || '未设置定位', view: 'characters', characterId: character.id }); });
+  (desktopState.data.assets || []).forEach((asset) => { if (matches(asset.name, asset.fileName, asset.type)) results.push({ type: '素材', title: asset.name, detail: asset.fileName || asset.type, view: 'assets', assetId: asset.id }); });
+  return results.slice(0, 24);
+}
+function setProjectSearchResultsOpen(open) {
+  const results = document.getElementById('projectSearchResults');
+  if (!results) return;
+  results.hidden = !open;
+  results.classList.toggle('hidden', !open);
+}
+function navigateToProjectSearchResult(result) {
+  if (result.view === 'editor') {
+    syncCurrentScene(); activeChapterIndex = result.chapterIndex; activeSceneIndex = result.sceneIndex; selectedBlockIndex = result.blockIndex ?? 0;
+    expandedChapterIds.add(currentChapter().id); renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]')?.click();
+    if (Number.isInteger(result.blockIndex)) requestAnimationFrame(() => document.querySelector(`.script-block[data-block-index="${result.blockIndex}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  } else {
+    document.querySelector(`[data-view="${result.view}"]`)?.click();
+    requestAnimationFrame(() => document.querySelector(result.characterId ? `[data-character-id="${result.characterId}"]` : `[data-asset-id="${result.assetId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  }
+  setProjectSearchResultsOpen(false);
+}
+function renderProjectSearchResults() {
+  const input = document.getElementById('projectSearchInput'); const container = document.getElementById('projectSearchResults');
+  if (!input || !container) return;
+  const query = input.value.trim(); const results = collectProjectSearchResults(query); container.replaceChildren();
+  if (!query) { setProjectSearchResultsOpen(false); return; }
+  if (!results.length) addChild(container, 'div', 'project-search-empty', '没有找到匹配内容');
+  results.forEach((result) => {
+    const button = addChild(container, 'button', 'project-search-result'); button.type = 'button';
+    addChild(button, 'span', 'project-search-result-type', result.type); const copy = addChild(button, 'span', 'project-search-result-copy'); addChild(copy, 'b', '', result.title); addChild(copy, 'small', '', result.detail);
+    button.addEventListener('click', () => navigateToProjectSearchResult(result));
+  });
+  setProjectSearchResultsOpen(true);
+}
+document.getElementById('projectSearchInput')?.addEventListener('input', renderProjectSearchResults);
+document.getElementById('projectSearchInput')?.addEventListener('focus', renderProjectSearchResults);
 document.getElementById('previewBtn')?.addEventListener('click', () => { updatePreview(); document.getElementById('previewModal').classList.remove('hidden'); }); document.getElementById('closePreview')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden')); document.querySelector('.modal-backdrop')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden'));
-document.addEventListener('keydown', (event) => { if (!(event.ctrlKey || event.metaKey)) return; const key = event.key.toLowerCase(); if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } });
+document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); openApplicationDialog('settings'); } });
+applyInterfaceScale(Number(localStorage.getItem('rropeway-interface-scale') || 100), false);
 desktopApi?.onBeforeClose(async () => { const saved = await saveProject(); if (saved) desktopApi.finishClose(); else desktopApi.cancelClose(); });
 setInterval(() => { if (desktopState.dirty && desktopState.data) localStorage.setItem('scriptroom-draft', JSON.stringify({ filePath: desktopState.filePath, data: captureProject(), savedAt: Date.now() })); }, 10000);
 if (desktopApi) desktopApi.newProject().then(async (result) => { const draft = localStorage.getItem('scriptroom-draft'); if (draft && await requestConfirmation('发现上次未保存的临时草稿，是否恢复？')) { const recovered = JSON.parse(draft); applyProject(recovered.data, recovered.filePath); markDirty(); } else { applyProject(result.data); } editHistory = [[...document.querySelectorAll('[contenteditable="true"]')].map((item) => item.innerHTML)]; historyIndex = 0; });
@@ -590,7 +707,7 @@ function renderCharacters() {
   });
   const grid = addChild(view, 'div', 'character-grid');
   (desktopState.data.characters || []).forEach((character, characterIndex) => {
-    const card = addChild(grid, 'article', `character-card${activeDialogueBlock()?.character === character.name ? ' selected' : ''}`);
+    const card = addChild(grid, 'article', `character-card${activeDialogueBlock()?.character === character.name ? ' selected' : ''}`); card.dataset.characterId = character.id;
     const art = addChild(card, 'div', 'character-portrait-card');
     art.style.setProperty('--character-color', character.color || '#f2674f');
     if (character.portraitPreset) addChild(art, 'div', `default-silhouette silhouette-${character.portraitPreset}`);
@@ -737,5 +854,6 @@ document.addEventListener('click', (event) => {
   }
   if (!event.target.closest('#workspaceSwitcher') && !event.target.closest('.project-popover')) document.querySelector('.project-popover')?.remove();
   if (!event.target.closest('.window-menu')) closeWindowProjectMenu();
+  if (!event.target.closest('#projectSearch')) setProjectSearchResultsOpen(false);
   if (!event.target.closest('.tree-context-menu')) closeTreeContextMenu();
 });
