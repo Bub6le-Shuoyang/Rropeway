@@ -48,3 +48,76 @@
   opacity: 0.3;
   cursor: default;
 }
+
+.toolbar-select {
+  max-width: 190px;
+  border: 1px solid #f0ddd3;
+  border-radius: 8px;
+  padding: 7px 30px 7px 10px;
+  background: #fffefa;
+  color: #555a55;
+  font-size: 13px;
+}
+
+.toolbar-select:disabled,
+.add-block:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.editor-input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.add-segment {
+  margin-top: 8px;
+  color: #7f8f86;
+}
+
+.segment-block {
+  min-height: 54px;
+  border-style: dashed;
+  border-color: #d8ddd7;
+  background: #f8fbf8;
+}
+
+.segment-block .segment-title {
+  margin-top: 3px;
+  font-weight: 800;
+  color: #4f5e55;
+}
+
+.segment-perspective {
+  display: block;
+  margin-top: 3px;
+  color: #8c9990;
+  font-size: 12px;
+}
+
+.pov-dialogue {
+  flex-direction: row-reverse;
+  padding-right: 35px;
+}
+
+.pov-dialogue .dialogue-meta {
+  justify-content: flex-end;
+}
+
+.pov-dialogue .block-content {
+  text-align: right;
+}
+
+.status-pill,
+.pov-pill {
+  border-radius: 4px;
+  padding: 3px 6px;
+  background: #fff0e9;
+  color: #c96a54;
+  font-size: 12px;
+}
+
+.pov-pill {
+  background: #edf7f0;
+  color: #648573;
+}

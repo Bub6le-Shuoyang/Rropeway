@@ -30,3 +30,16 @@ test('角色代表色和默认立绘会被规范化保存', () => {
   assert.equal(project.characters[0].portraitPreset, 'short-female');
   assert.equal(project.characters[0].description, '测试角色');
 });
+
+test('对白状态标签和角色标识会被保存', () => {
+  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', character: '角色A', characterId: 'character-a', statusTag: '压低声音' }] }] }] });
+  const block = project.chapters[0].scenes[0].blocks[0];
+  assert.equal(block.characterId, 'character-a');
+  assert.equal(block.statusTag, '压低声音');
+});
+
+test('旧情绪标签会迁移为状态标签并支持分段主视角', () => {
+  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', emotion: '紧张' }, { type: 'segment', title: '调查开始', perspectiveCharacterId: 'character-a' }] }] }] });
+  assert.equal(project.chapters[0].scenes[0].blocks[0].statusTag, '紧张');
+  assert.deepEqual(project.chapters[0].scenes[0].blocks[1], { type: 'segment', title: '调查开始', perspectiveCharacterId: 'character-a' });
+});

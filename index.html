@@ -35,9 +35,10 @@
             <div class="script-heading"><div><div class="eyebrow">SCRIPT EDITOR</div><h1>未命名场景</h1><p class="muted">空白场景</p></div><div class="heading-actions"><button class="primary-button" id="previewBtn">▶ 预览</button></div></div>
             <div class="scene-tabs"></div>
             <div class="script-canvas">
-              <div class="canvas-toolbar"><span>对白流</span><div class="toolbar-spacer"></div><button class="toolbar-icon" title="撤销">↶</button><button class="toolbar-icon" title="重做">↷</button></div>
+              <div class="canvas-toolbar"><span>对白流</span><div class="toolbar-spacer"></div><select class="toolbar-select" id="dialogueCharacterSelect" aria-label="新增对白角色" disabled><option value="">选择角色后添加对白</option></select><button class="toolbar-icon" title="撤销">↶</button><button class="toolbar-icon" title="重做">↷</button></div>
               <div class="timeline-line"></div>
-              <button class="add-block" id="addDialogue"><span>＋</span> 添加对白</button>
+              <button class="add-block" id="addDialogue" disabled><span>＋</span> 添加对白</button>
+              <button class="add-block add-segment" id="addSegment"><span>＋</span> 添加分段</button>
             </div>
           </section>
 
