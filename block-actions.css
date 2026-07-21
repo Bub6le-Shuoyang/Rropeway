@@ -1278,6 +1278,71 @@
   }
 }
 
+/* Final compact interactions */
+.project-search {
+  border-radius: 18px;
+  padding-right: 14px;
+}
+
+.window-project-menu button:disabled {
+  opacity: .42;
+  cursor: default;
+}
+
+.window-project-menu button:disabled:hover {
+  background: transparent;
+  color: #535a55;
+}
+
+.back-to-top {
+  width: 24px;
+  height: 24px;
+  border: 0 !important;
+  border-radius: 0;
+  padding: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #f2674f;
+  font-size: 19px;
+}
+
+.back-to-top:hover {
+  color: #dc563f;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.chapter-entry {
+  grid-template-columns: 17px minmax(0, 1fr) 24px;
+}
+
+.chapter-entry .chapter,
+.chapter-scene-file {
+  cursor: grab;
+}
+
+.chapter-entry .chapter:active,
+.chapter-scene-file:active {
+  cursor: grabbing;
+}
+
+.chapter-folder-icon,
+.scene-file-icon,
+.chapter-drag-handle,
+.scene-drag-handle {
+  display: none !important;
+}
+
+.chapter-scene-entry {
+  display: block;
+}
+
+.chapter-scene-file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
 .chapter-scene-list {
   display: grid;
   gap: 1px;
@@ -1528,4 +1593,10 @@
   .inspector {
     display: none;
   }
+}
+
+.chapter-scene-file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
 }

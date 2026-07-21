@@ -7,8 +7,13 @@ let desktopState = { filePath: null, data: null, dirty: false };
 let activeChapterIndex = 0;
 let activeSceneIndex = 0;
 let selectedBlockIndex = 1;
-let editHistory = [];
-let historyIndex = -1;
+let projectHistory = [];
+let projectHistoryIndex = -1;
+let restoringProjectHistory = false;
+let editRevision = 0;
+let autoSaveTimer = null;
+let activeSavePromise = null;
+let autoSaveQueued = false;
 let suppressDeleteConfirmation = false;
 let newDialogueCharacterId = '';
 let savedTextRange = null;
@@ -16,10 +21,18 @@ let savedTextBlockIndex = null;
 const expandedChapterIds = new Set();
 let draggedChapterId = null;
 let draggedSceneInfo = null;
+let ignoreTreeClickUntil = 0;
 
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('show'), 2400); }
 function setSaveStatus(status, time = '') { document.getElementById('saveStatus').textContent = status; document.getElementById('saveTime').textContent = time; }
-function markDirty() { desktopState.dirty = true; desktopApi?.setDirty(true); setSaveStatus('有未保存修改', '现在'); }
+function markDirty() {
+  desktopState.dirty = true;
+  editRevision += 1;
+  desktopApi?.setDirty(true);
+  setSaveStatus(desktopState.filePath ? '等待自动保存' : '有未保存修改', '现在');
+  recordProjectSnapshot();
+  scheduleAutoSave();
+}
 function currentChapter() { return desktopState.data?.chapters?.[activeChapterIndex]; }
 function currentScene() { return currentChapter()?.scenes?.[activeSceneIndex]; }
 function node(tag, className, text) { const item = document.createElement(tag); if (className) item.className = className; if (text !== undefined) item.textContent = text; return item; }
@@ -124,6 +137,21 @@ function captureBlocks() {
     return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '未命名角色', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#f2674f', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: paragraph?.textContent.trim() || '', textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
   });
 }
+
+function requestNotice(title, message) {
+  return new Promise((resolve) => {
+    const overlay = node('div', 'editor-dialog-overlay');
+    const dialog = addChild(overlay, 'div', 'editor-dialog');
+    addChild(dialog, 'h3', '', title);
+    addChild(dialog, 'p', 'editor-dialog-message', message);
+    const actions = addChild(dialog, 'div', 'editor-dialog-actions');
+    const confirm = addChild(actions, 'button', 'file-button save', '知道了');
+    const close = () => { overlay.remove(); resolve(); };
+    confirm.addEventListener('click', close);
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+    document.body.appendChild(overlay);
+  });
+}
 function requestDeleteConfirmation(message) {
   if (suppressDeleteConfirmation) return Promise.resolve(true);
   return new Promise((resolve) => {
@@ -170,6 +198,54 @@ function sanitizeRichTextHtml(html) {
 }
 function syncCurrentScene() { const scene = currentScene(); if (scene) scene.blocks = captureBlocks(); }
 function captureProject() { syncCurrentScene(); const data = desktopState.data; data.title = String(data.title || document.getElementById('workspaceTitle').textContent || 'Rropeway').trim(); data.chapters[0] && (data.chapters[0].title = data.chapters[0].title || '第一章'); return data; }
+function updateUndoAvailability() {
+  const undoButton = document.getElementById('undoProjectBtn');
+  if (undoButton) undoButton.disabled = projectHistoryIndex <= 0;
+  const toolbarUndo = document.querySelector('[title="撤销"]');
+  const toolbarRedo = document.querySelector('[title="重做"]');
+  if (toolbarUndo) toolbarUndo.disabled = projectHistoryIndex <= 0;
+  if (toolbarRedo) toolbarRedo.disabled = projectHistoryIndex >= projectHistory.length - 1;
+}
+function resetProjectHistory() {
+  if (!desktopState.data) return;
+  projectHistory = [JSON.stringify(captureProject())];
+  projectHistoryIndex = 0;
+  updateUndoAvailability();
+}
+function recordProjectSnapshot() {
+  if (restoringProjectHistory || !desktopState.data) return;
+  const snapshot = JSON.stringify(captureProject());
+  if (projectHistory[projectHistoryIndex] === snapshot) { updateUndoAvailability(); return; }
+  projectHistory = projectHistory.slice(0, projectHistoryIndex + 1);
+  projectHistory.push(snapshot);
+  if (projectHistory.length > 120) projectHistory.shift();
+  projectHistoryIndex = projectHistory.length - 1;
+  updateUndoAvailability();
+}
+function restoreProjectHistory(targetIndex, message) {
+  if (targetIndex < 0 || targetIndex >= projectHistory.length || targetIndex === projectHistoryIndex) return;
+  clearTimeout(autoSaveTimer);
+  const filePath = desktopState.filePath;
+  restoringProjectHistory = true;
+  projectHistoryIndex = targetIndex;
+  applyProject(JSON.parse(projectHistory[projectHistoryIndex]), filePath, { resetHistory: false });
+  restoringProjectHistory = false;
+  desktopState.dirty = true;
+  editRevision += 1;
+  desktopApi?.setDirty(true);
+  setSaveStatus(filePath ? '等待自动保存' : '有未保存修改', '现在');
+  updateUndoAvailability();
+  scheduleAutoSave();
+  showToast(message);
+}
+function undoProjectChange() {
+  if (projectHistoryIndex <= 0) { showToast('没有可撤回的操作'); return; }
+  restoreProjectHistory(projectHistoryIndex - 1, '已撤回上一步');
+}
+function redoProjectChange() {
+  if (projectHistoryIndex >= projectHistory.length - 1) { showToast('没有可重做的操作'); return; }
+  restoreProjectHistory(projectHistoryIndex + 1, '已重做');
+}
 
 function perspectiveCharacterIdAt(index) {
   const blocks = currentScene()?.blocks || [];
@@ -299,7 +375,7 @@ async function deleteScene(chapterIndex, sceneIndex) {
   const nextScene = chapter.scenes[Math.min(sceneIndex, chapter.scenes.length - 1)]; const keepSceneId = activeSceneId === scene.id ? nextScene.id : activeSceneId;
   finishTreeMutation(activeChapterId, keepSceneId, '场景已删除');
 }
-function clearTreeDragState() { draggedChapterId = null; draggedSceneInfo = null; document.querySelectorAll('.chapter-tree-node,.chapter-scene-entry').forEach((item) => item.classList.remove('dragging', 'drag-over')); }
+function clearTreeDragState() { if (draggedChapterId || draggedSceneInfo) ignoreTreeClickUntil = Date.now() + 160; draggedChapterId = null; draggedSceneInfo = null; document.querySelectorAll('.chapter-tree-node,.chapter-scene-entry').forEach((item) => item.classList.remove('dragging', 'drag-over')); }
 async function renameChapterAt(chapterIndex) {
   const chapter = desktopState.data.chapters[chapterIndex];
   if (!chapter) return;
@@ -327,14 +403,13 @@ function renderChapters() {
     const isExpanded = expandedChapterIds.has(chapter.id);
     const treeNode = addChild(list, 'div', 'chapter-tree-node');
     const entry = addChild(treeNode, 'div', 'chapter-entry');
-    const dragHandle = addChild(entry, 'span', 'chapter-drag-handle', '⠿'); dragHandle.draggable = true; dragHandle.title = '拖动章节';
     const toggle = addChild(entry, 'button', 'chapter-tree-toggle', isExpanded ? '▾' : '▸'); toggle.type = 'button'; toggle.title = isExpanded ? '折叠章节' : '展开章节';
-    const button = addChild(entry, 'button', `chapter${index === activeChapterIndex ? ' active' : ''}`);
-    addChild(button, 'span', 'chapter-folder-icon', '▤');
+    const button = addChild(entry, 'button', `chapter${index === activeChapterIndex ? ' active' : ''}`); button.draggable = true; button.title = '按住拖动章节，双击重命名';
     addChild(button, 'b', '', chapter.title);
     addChild(entry, 'span', 'chapter-scene-count', String(chapter.scenes.length));
     toggle.addEventListener('click', () => { if (isExpanded) expandedChapterIds.delete(chapter.id); else expandedChapterIds.add(chapter.id); renderChapters(); });
     button.addEventListener('click', () => {
+      if (Date.now() < ignoreTreeClickUntil) return;
       syncCurrentScene();
       const wasActiveChapter = index === activeChapterIndex;
       expandedChapterIds.add(chapter.id);
@@ -351,8 +426,8 @@ function renderChapters() {
       { label: '重命名章节', action: () => renameChapterAt(index) },
       { label: '删除章节', danger: true, action: () => deleteChapter(index) }
     ]));
-    dragHandle.addEventListener('dragstart', (event) => { event.stopPropagation(); draggedChapterId = chapter.id; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', chapter.id); treeNode.classList.add('dragging'); });
-    dragHandle.addEventListener('dragend', clearTreeDragState);
+    button.addEventListener('dragstart', (event) => { event.stopPropagation(); draggedChapterId = chapter.id; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', chapter.id); treeNode.classList.add('dragging'); });
+    button.addEventListener('dragend', clearTreeDragState);
     treeNode.addEventListener('dragover', (event) => { if (!draggedChapterId && !draggedSceneInfo) return; event.preventDefault(); event.stopPropagation(); treeNode.classList.add('drag-over'); });
     treeNode.addEventListener('dragleave', () => treeNode.classList.remove('drag-over'));
     treeNode.addEventListener('drop', (event) => { event.preventDefault(); event.stopPropagation(); if (draggedChapterId) moveChapter(draggedChapterId, chapter.id); else if (draggedSceneInfo) moveScene(draggedSceneInfo, chapter.id); clearTreeDragState(); });
@@ -360,12 +435,11 @@ function renderChapters() {
       const sceneList = addChild(treeNode, 'div', 'chapter-scene-list');
       chapter.scenes.forEach((scene, sceneIndex) => {
         const sceneEntry = addChild(sceneList, 'div', 'chapter-scene-entry');
-        const sceneDragHandle = addChild(sceneEntry, 'span', 'scene-drag-handle', '⠿'); sceneDragHandle.draggable = true; sceneDragHandle.title = '拖动场景';
-        const sceneButton = addChild(sceneEntry, 'button', `chapter-scene-file${index === activeChapterIndex && sceneIndex === activeSceneIndex ? ' active' : ''}`);
-        addChild(sceneButton, 'span', 'scene-file-icon', '▱');
+        const sceneButton = addChild(sceneEntry, 'button', `chapter-scene-file${index === activeChapterIndex && sceneIndex === activeSceneIndex ? ' active' : ''}`); sceneButton.draggable = true; sceneButton.title = '按住拖动场景，双击重命名';
         addChild(sceneButton, 'span', 'scene-file-name', scene.title);
         addChild(sceneButton, 'span', 'scene-file-number', scene.number);
         sceneButton.addEventListener('click', () => {
+          if (Date.now() < ignoreTreeClickUntil) return;
           syncCurrentScene();
           expandedChapterIds.add(chapter.id);
           activeChapterIndex = index;
@@ -381,8 +455,8 @@ function renderChapters() {
           { label: '重命名场景', action: () => renameSceneAt(index, sceneIndex) },
           { label: '删除场景', danger: true, action: () => deleteScene(index, sceneIndex) }
         ]));
-        sceneDragHandle.addEventListener('dragstart', (event) => { event.stopPropagation(); draggedSceneInfo = { chapterId: chapter.id, sceneId: scene.id }; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', scene.id); sceneEntry.classList.add('dragging'); });
-        sceneDragHandle.addEventListener('dragend', clearTreeDragState);
+        sceneButton.addEventListener('dragstart', (event) => { event.stopPropagation(); draggedSceneInfo = { chapterId: chapter.id, sceneId: scene.id }; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', scene.id); sceneEntry.classList.add('dragging'); });
+        sceneButton.addEventListener('dragend', clearTreeDragState);
         sceneEntry.addEventListener('dragover', (event) => { if (!draggedSceneInfo) return; event.preventDefault(); event.stopPropagation(); sceneEntry.classList.add('drag-over'); });
         sceneEntry.addEventListener('dragleave', () => sceneEntry.classList.remove('drag-over'));
         sceneEntry.addEventListener('drop', (event) => { event.preventDefault(); event.stopPropagation(); moveScene(draggedSceneInfo, chapter.id, scene.id); clearTreeDragState(); });
@@ -429,10 +503,64 @@ async function renameProject() {
   markDirty();
   showToast(`项目已重命名为「${normalizedTitle}」`);
 }
-function applyProject(data, filePath = null) { desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setSaveStatus(filePath ? '已打开本地项目' : '本地新项目', filePath ? '刚刚' : '未保存'); }
-async function saveProject() { if (!desktopApi) return false; try { const result = await desktopApi.saveProject({ filePath: desktopState.filePath, data: captureProject() }); if (!result) return false; desktopState.filePath = result.filePath; desktopState.data = result.data; rememberProject(result.filePath, result.data.title); desktopState.dirty = false; desktopApi.setDirty(false); localStorage.removeItem('scriptroom-draft'); setSaveStatus('已保存到本地', new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); showToast('项目已保存'); return true; } catch (error) { showToast(error.message || '保存失败'); return false; } }
-async function openProject() { if (desktopState.dirty && !(await requestConfirmation('当前项目有未保存修改，确定打开另一个项目吗？'))) return; try { const result = await desktopApi.openProject(); if (result) { applyProject(result.data, result.filePath); showToast('项目已打开'); } } catch (error) { showToast(error.message || '打开失败'); } }
-async function newProject() { if (desktopState.dirty && !(await requestConfirmation('当前项目有未保存修改，确定新建项目吗？'))) return; const result = await desktopApi.newProject(); applyProject(result.data); showToast('已新建空白项目'); }
+function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setSaveStatus(filePath ? '已打开本地项目' : '本地新项目', filePath ? '刚刚' : '未保存'); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
+function scheduleAutoSave(delay = 700) {
+  clearTimeout(autoSaveTimer);
+  if (!desktopState.filePath || !desktopState.dirty || restoringProjectHistory) return;
+  autoSaveTimer = setTimeout(() => saveProject({ silent: true }), delay);
+}
+async function saveProject(options = {}) {
+  if (!desktopApi) return false;
+  const silent = Boolean(options.silent);
+  clearTimeout(autoSaveTimer);
+  if (activeSavePromise) { autoSaveQueued = true; return activeSavePromise; }
+  const revisionAtStart = editRevision;
+  const payload = { filePath: desktopState.filePath, data: JSON.parse(JSON.stringify(captureProject())) };
+  setSaveStatus(silent ? '正在自动保存' : '正在保存', '现在');
+  activeSavePromise = (async () => {
+    try {
+      const result = await desktopApi.saveProject(payload);
+      if (!result) { setSaveStatus('保存已取消', '现在'); return false; }
+      desktopState.filePath = result.filePath;
+      rememberProject(result.filePath, result.data.title);
+      if (editRevision === revisionAtStart) {
+        desktopState.data = result.data;
+        desktopState.dirty = false;
+        desktopApi.setDirty(false);
+        localStorage.removeItem('scriptroom-draft');
+        setSaveStatus(silent ? '已自动保存' : '已保存到本地', new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      } else {
+        desktopState.dirty = true;
+        desktopApi.setDirty(true);
+        autoSaveQueued = true;
+        setSaveStatus('有新的修改', '现在');
+      }
+      if (!silent) showToast('项目已保存');
+      return true;
+    } catch (error) {
+      setSaveStatus('自动保存失败', '现在');
+      showToast(error.message || '保存失败');
+      return false;
+    }
+  })();
+  const saved = await activeSavePromise;
+  activeSavePromise = null;
+  if (autoSaveQueued) { autoSaveQueued = false; scheduleAutoSave(160); }
+  return saved;
+}
+async function prepareProjectSwitch(message) {
+  if (!desktopState.dirty) return true;
+  if (desktopState.filePath) {
+    clearTimeout(autoSaveTimer);
+    autoSaveQueued = false;
+    while (activeSavePromise) await activeSavePromise;
+    if (desktopState.dirty) return saveProject({ silent: true });
+    return true;
+  }
+  return requestConfirmation(message);
+}
+async function openProject() { if (!(await prepareProjectSwitch('当前项目有未保存修改，确定打开另一个项目吗？'))) return; try { const result = await desktopApi.openProject(); if (result) { applyProject(result.data, result.filePath); showToast('项目已打开'); } } catch (error) { showToast(error.message || '打开失败'); } }
+async function newProject() { if (!(await prepareProjectSwitch('当前项目有未保存修改，确定新建项目吗？'))) return; const result = await desktopApi.newProject(); applyProject(result.data); showToast('已新建空白项目'); }
 async function importAssets() { if (!desktopState.filePath) { if (!(await saveProject())) return; } try { const assets = await desktopApi.importAssets(desktopState.filePath); if (!assets.length) return; desktopState.data.assets.push(...assets); renderImportedAssets(); markDirty(); showToast(`已导入 ${assets.length} 个素材`); } catch (error) { showToast(error.message || '素材导入失败'); } }
 function updatePreview() {
   syncCurrentScene();
@@ -461,9 +589,9 @@ function updatePreview() {
 
 navItems.forEach((item) => item.addEventListener('click', () => { const target = item.dataset.view; navItems.forEach((nav) => nav.classList.toggle('active', nav === item)); document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor'); views.characters.classList.toggle('hidden', target !== 'characters'); views.assets.classList.toggle('hidden', target !== 'assets'); document.querySelector('.breadcrumb span').textContent = target === 'characters' ? '角色与立绘' : target === 'assets' ? '素材库' : '剧本编辑器'; if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets(); }));
 document.addEventListener('click', (event) => { const block = event.target.closest('.script-block'); if (block) { selectedBlockIndex = Number(block.dataset.blockIndex || 0); document.querySelectorAll('.script-block').forEach((item) => item.classList.toggle('selected', item === block)); renderInspector(); } if (event.target.closest('#addDialogue')) { syncCurrentScene(); const character = desktopState.data.characters?.find((item) => item.id === newDialogueCharacterId); if (!character) { showToast('请先在右侧设置新增对白角色'); return; } currentScene().blocks.push({ type: 'dialogue', character: character.name, characterId: character.id, characterKey: 'mei', characterColor: character.color || '#f2674f', portraitPreset: character.portraitPreset || null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] p`)?.focus(); markDirty(); showToast('已添加一条对白'); } if (event.target.closest('#addSegment')) { syncCurrentScene(); const segmentNumber = currentScene().blocks.filter((item) => item.type === 'segment').length + 1; currentScene().blocks.push({ type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); markDirty(); showToast('已添加分段'); } });
-document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { editHistory = editHistory.slice(0, historyIndex + 1); editHistory.push([...document.querySelectorAll('[contenteditable="true"]')].map((item) => item.innerHTML)); historyIndex = editHistory.length - 1; if (event.target.closest('.segment-title')) renderSegmentNavigator(); markDirty(); } });
-document.querySelector('[title="撤销"]')?.addEventListener('click', () => { if (historyIndex > 0) { historyIndex -= 1; document.querySelectorAll('[contenteditable="true"]').forEach((item, index) => { item.innerHTML = editHistory[historyIndex][index] ?? item.innerHTML; }); markDirty(); } });
-document.querySelector('[title="重做"]')?.addEventListener('click', () => { if (historyIndex < editHistory.length - 1) { historyIndex += 1; document.querySelectorAll('[contenteditable="true"]').forEach((item, index) => { item.innerHTML = editHistory[historyIndex][index] ?? item.innerHTML; }); markDirty(); } });
+document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { if (event.target.closest('.segment-title')) renderSegmentNavigator(); markDirty(); } });
+document.querySelector('[title="撤销"]')?.addEventListener('click', undoProjectChange);
+document.querySelector('[title="重做"]')?.addEventListener('click', redoProjectChange);
 document.getElementById('addChapter')?.addEventListener('click', () => { const chapters = desktopState.data.chapters; const chapterNumber = chapters.length + 1; const chapter = { id: `chapter-${Date.now()}`, title: `未命名章节 ${chapterNumber}`, status: '草稿', scenes: [{ id: `scene-${Date.now()}`, number: '01', title: '未命名场景', blocks: [] }] }; chapters.push(chapter); expandedChapterIds.add(chapter.id); activeChapterIndex = chapters.length - 1; activeSceneIndex = 0; renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]').click(); markDirty(); showToast('已添加新章节'); });
 function setWindowProjectMenuOpen(open) {
   const menu = document.getElementById('windowProjectMenu'); const button = document.getElementById('projectMenuButton');
@@ -474,7 +602,7 @@ function setWindowProjectMenuOpen(open) {
 }
 function closeWindowProjectMenu() { setWindowProjectMenuOpen(false); }
 document.getElementById('projectMenuButton')?.addEventListener('click', (event) => { event.stopPropagation(); const menu = document.getElementById('windowProjectMenu'); setWindowProjectMenuOpen(Boolean(menu?.hidden)); });
-document.getElementById('newProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); newProject(); }); document.getElementById('openProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); openProject(); }); document.getElementById('saveProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); saveProject(); }); document.getElementById('renameProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); renameProject(); }); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
+document.getElementById('newProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); newProject(); }); document.getElementById('openProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); openProject(); }); document.getElementById('saveProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); saveProject(); }); document.getElementById('undoProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); undoProjectChange(); }); document.getElementById('renameProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); renameProject(); }); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
 function applyInterfaceScale(scale, persist = true) {
   const safeScale = [90, 100, 110].includes(Number(scale)) ? Number(scale) : 100;
   document.body.style.zoom = String(safeScale / 100);
@@ -569,11 +697,11 @@ function renderProjectSearchResults() {
 document.getElementById('projectSearchInput')?.addEventListener('input', renderProjectSearchResults);
 document.getElementById('projectSearchInput')?.addEventListener('focus', renderProjectSearchResults);
 document.getElementById('previewBtn')?.addEventListener('click', () => { updatePreview(); document.getElementById('previewModal').classList.remove('hidden'); }); document.getElementById('closePreview')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden')); document.querySelector('.modal-backdrop')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden'));
-document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); openApplicationDialog('settings'); } });
+document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); openApplicationDialog('settings'); } });
 applyInterfaceScale(Number(localStorage.getItem('rropeway-interface-scale') || 100), false);
 desktopApi?.onBeforeClose(async () => { const saved = await saveProject(); if (saved) desktopApi.finishClose(); else desktopApi.cancelClose(); });
 setInterval(() => { if (desktopState.dirty && desktopState.data) localStorage.setItem('scriptroom-draft', JSON.stringify({ filePath: desktopState.filePath, data: captureProject(), savedAt: Date.now() })); }, 10000);
-if (desktopApi) desktopApi.newProject().then(async (result) => { const draft = localStorage.getItem('scriptroom-draft'); if (draft && await requestConfirmation('发现上次未保存的临时草稿，是否恢复？')) { const recovered = JSON.parse(draft); applyProject(recovered.data, recovered.filePath); markDirty(); } else { applyProject(result.data); } editHistory = [[...document.querySelectorAll('[contenteditable="true"]')].map((item) => item.innerHTML)]; historyIndex = 0; });
+if (desktopApi) desktopApi.newProject().then(async (result) => { const draft = localStorage.getItem('scriptroom-draft'); if (draft && await requestConfirmation('发现上次未保存的临时草稿，是否恢复？')) { const recovered = JSON.parse(draft); applyProject(recovered.data, recovered.filePath); markDirty(); } else { applyProject(result.data); } });
 
 // Interactive editor layer: characters, inspector controls, drag sorting and project switcher.
 let draggedBlockIndex = null;
@@ -765,17 +893,30 @@ function renderCharacters() {
   }
 }
 function recentProjects() {
-  try { return JSON.parse(localStorage.getItem('scriptroom-recent-projects') || '[]'); } catch { return []; }
+  try {
+    const projects = JSON.parse(localStorage.getItem('scriptroom-recent-projects') || '[]');
+    if (!Array.isArray(projects)) return [];
+    const seen = new Set();
+    return projects.filter((item) => { if (!item?.filePath || seen.has(item.filePath)) return false; seen.add(item.filePath); return true; });
+  } catch { return []; }
 }
 function rememberProject(filePath, title) {
   if (!filePath) return;
   const projects = recentProjects().filter((item) => item.filePath !== filePath);
-  projects.unshift({ filePath, title: title || '未命名项目' });
-  localStorage.setItem('scriptroom-recent-projects', JSON.stringify(projects.slice(0, 8)));
+  projects.unshift({ filePath, title: title || '未命名项目', openedAt: Date.now() });
+  localStorage.setItem('scriptroom-recent-projects', JSON.stringify(projects));
+}
+function forgetRecentProject(filePath) {
+  localStorage.setItem('scriptroom-recent-projects', JSON.stringify(recentProjects().filter((item) => item.filePath !== filePath)));
 }
 async function openRecentProject(filePath) {
   if (filePath === desktopState.filePath) { document.querySelector('[data-view="editor"]').click(); return; }
-  if (desktopState.dirty && !(await requestConfirmation('当前项目有未保存修改，确定切换项目吗？'))) return;
+  if (!(await prepareProjectSwitch('当前项目有未保存修改，确定切换项目吗？'))) return;
+  if (!(await desktopApi.projectExists(filePath))) {
+    forgetRecentProject(filePath);
+    await requestNotice('项目文件不存在', `找不到项目文件：${filePath}\n这条历史记录已自动删除。`);
+    return;
+  }
   try {
     const result = await desktopApi.openProjectPath(filePath);
     applyProject(result.data, result.filePath);
@@ -809,7 +950,7 @@ function openProjectMenu() {
   menu.style.top = `${anchor.bottom + 8}px`;
 }
 const baseApplyProject = applyProject;
-applyProject = function (data, filePath = null) { baseApplyProject(data, filePath); if (filePath) rememberProject(filePath, data.title); renderCharacters(); renderInspector(); };
+applyProject = function (data, filePath = null, options = {}) { baseApplyProject(data, filePath, options); if (filePath) rememberProject(filePath, data.title); renderCharacters(); renderInspector(); };
 function updateEditorScrollTools() {
   const panel = document.querySelector('.script-panel'); const backToTop = document.getElementById('backToTop'); const navigator = document.getElementById('segmentNavigator');
   if (!panel || !backToTop || !navigator) return;

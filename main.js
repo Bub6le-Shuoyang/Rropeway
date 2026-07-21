@@ -39,6 +39,10 @@ async function chooseProject() {
 }
 ipcMain.handle('project:new', () => ({ filePath: null, data: clone(DEFAULT_PROJECT) }));
 ipcMain.handle('app:get-version', () => app.getVersion());
+ipcMain.handle('project:exists', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return false;
+  try { return (await fs.stat(filePath)).isFile(); } catch { return false; }
+});
 ipcMain.handle('project:open', async () => {
   const filePath = await chooseProject();
   if (!filePath) return null;
