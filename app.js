@@ -255,7 +255,7 @@ function captureBlocks() {
     if (block.classList.contains('narration')) return { type: 'narration', text: block.querySelector('.block-content p')?.textContent.trim() || '' };
     if (block.classList.contains('choice-block')) return { type: 'choice', title: block.querySelector('.choice-title')?.textContent.trim() || '', options: [...block.querySelectorAll('.choices button')].map((item) => item.querySelector('.choice-text')?.textContent.trim() || '') };
     const paragraph = block.querySelector('.block-content p');
-    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: richTextPlainText(paragraph), textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
+    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: richTextPlainText(paragraph), textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^(?:创作备注|注)：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
   });
 }
 
@@ -441,12 +441,22 @@ function createBlockElement(block, index) {
     const paragraph = addChild(content, 'p');
     if (block.textHtml) paragraph.innerHTML = sanitizeRichTextHtml(block.textHtml); else paragraph.textContent = block.text || '';
     paragraph.style.textAlign = block.textAlign || 'left';
-    if (block.note) addChild(content, 'div', 'block-note', `注：${block.note}`);
+    if (block.note) addChild(content, 'div', 'block-note', `创作备注：${block.note}`);
     if (block.portrait) wrapper.dataset.portrait = block.portrait; if (block.portraitPreset) wrapper.dataset.portraitPreset = block.portraitPreset; if (block.characterId || character?.id) wrapper.dataset.characterId = block.characterId || character.id; wrapper.dataset.characterColor = block.characterColor || character?.color || '#b8bcb8';
   }
   wrapper.appendChild(content);
   wrapper.querySelectorAll('p').forEach((paragraph) => { paragraph.contentEditable = 'true'; });
   return wrapper;
+}
+
+function syncDialogueNoteDisplay(blockIndex, value) {
+  const content = document.querySelector(`.script-block[data-block-index="${blockIndex}"] .block-content`);
+  if (!content) return;
+  let noteNode = content.querySelector('.block-note');
+  const note = String(value || '').trim();
+  if (!note) { noteNode?.remove(); return; }
+  if (!noteNode) noteNode = addChild(content, 'div', 'block-note');
+  noteNode.textContent = `创作备注：${note}`;
 }
 
 function renderScene() {
@@ -891,6 +901,14 @@ navItems.forEach((item) => item.addEventListener('click', () => {
   if (separator) separator.hidden = target !== 'editor'; if (detail) detail.hidden = target !== 'editor';
   if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets();
 }));
+function revealNewBlock(blockIndex, focusSelector) {
+  requestAnimationFrame(() => {
+    const panel = document.querySelector('.script-panel');
+    const block = document.querySelector(`.script-block[data-block-index="${blockIndex}"]`);
+    panel?.scrollTo({ top: panel.scrollHeight, behavior: 'smooth' });
+    block?.querySelector(focusSelector)?.focus({ preventScroll: true });
+  });
+}
 document.addEventListener('click', (event) => {
   const block = event.target.closest('.script-block');
   if (block) {
@@ -904,7 +922,7 @@ document.addEventListener('click', (event) => {
     currentScene().blocks.push({ type: 'dialogue', character: character?.name || '', characterId: character?.id || '', characterKey: 'mei', characterColor: character?.color || '#b8bcb8', portraitPreset: character?.portraitPreset || null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' });
     selectedBlockIndex = currentScene().blocks.length - 1;
     renderScene();
-    document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] p`)?.focus();
+    revealNewBlock(selectedBlockIndex, '.block-content p');
     markDirty();
     showToast('已添加一条对白');
   }
@@ -913,7 +931,7 @@ document.addEventListener('click', (event) => {
     currentScene().blocks.push({ type: 'narration', text: '' });
     selectedBlockIndex = currentScene().blocks.length - 1;
     renderScene();
-    document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .narration-text`)?.focus();
+    revealNewBlock(selectedBlockIndex, '.narration-text');
     markDirty();
     showToast('已添加一条旁白');
   }
@@ -923,6 +941,7 @@ document.addEventListener('click', (event) => {
     currentScene().blocks.push({ type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null });
     selectedBlockIndex = currentScene().blocks.length - 1;
     renderScene();
+    revealNewBlock(selectedBlockIndex, '.segment-title');
     markDirty();
     showToast('已添加分段');
   }
@@ -1413,7 +1432,8 @@ function renderInspector() {
       if (selectedCharacter?.portraitPreset) { const preset = addChild(assetSelect, 'option', '', '角色默认立绘'); preset.value = `preset:${selectedCharacter.portraitPreset}`; preset.selected = !dialogueBlock.portrait && dialogueBlock.portraitPreset === selectedCharacter.portraitPreset; }
       (desktopState.data.assets || []).filter((asset) => !['mp3', 'wav', 'ogg'].includes(asset.type)).forEach((asset) => { const option = addChild(assetSelect, 'option', '', asset.name); option.value = `asset:${asset.relativePath}`; option.selected = dialogueBlock.portrait === asset.relativePath; });
       assetSelect.addEventListener('change', () => { if (assetSelect.value.startsWith('asset:')) { dialogueBlock.portrait = assetSelect.value.slice(6); dialogueBlock.portraitPreset = null; } else if (assetSelect.value.startsWith('preset:')) { dialogueBlock.portrait = undefined; dialogueBlock.portraitPreset = assetSelect.value.slice(7); } else { dialogueBlock.portrait = undefined; dialogueBlock.portraitPreset = null; } renderScene(); markDirty(); });
-      const noteGroup = addChild(properties, 'div', 'property-group'); addChild(noteGroup, 'label', '', '创作备注'); const note = addChild(noteGroup, 'textarea', '', dialogueBlock.note || ''); note.placeholder = '给自己留下一句创作提示…'; note.addEventListener('input', () => { dialogueBlock.note = note.value; markDirty(); });
+      const noteBlockIndex = selectedBlockIndex;
+      const noteGroup = addChild(properties, 'div', 'property-group'); addChild(noteGroup, 'label', '', '创作备注'); const note = addChild(noteGroup, 'textarea', '', dialogueBlock.note || ''); note.placeholder = '给自己留下一句创作提示…'; note.addEventListener('input', () => { dialogueBlock.note = note.value; syncDialogueNoteDisplay(noteBlockIndex, note.value); markDirty(); });
     }
   }
   if (selectedBlock?.type !== 'narration') renderTextFormattingSettings(body, dialogueBlock);
@@ -1595,8 +1615,14 @@ function updateEditorScrollTools() {
   const panel = document.querySelector('.script-panel'); const backToTop = document.getElementById('backToTop'); const navigator = document.getElementById('segmentNavigator');
   if (!panel || !backToTop || !navigator) return;
   backToTop.classList.toggle('hidden', panel.scrollTop < 320);
+  const markers = [...navigator.querySelectorAll('.segment-nav-marker')];
+  const pinnedMarker = markers.find((marker) => marker.dataset.segmentIndex === navigator.dataset.activeSegmentIndex);
+  if (pinnedMarker) {
+    markers.forEach((marker) => marker.classList.toggle('active', marker === pinnedMarker));
+    return;
+  }
   let activeMarker = null;
-  navigator.querySelectorAll('.segment-nav-marker').forEach((marker) => { if (panel.scrollTop + 120 >= Number(marker.dataset.target || 0)) activeMarker = marker; marker.classList.remove('active'); });
+  markers.forEach((marker) => { if (panel.scrollTop + 120 >= Number(marker.dataset.target || 0)) activeMarker = marker; marker.classList.remove('active'); });
   activeMarker?.classList.add('active');
 }
 async function deleteProjectEntry(project) {
@@ -1626,17 +1652,20 @@ function renderSegmentNavigator() {
   requestAnimationFrame(() => {
     const panel = document.querySelector('.script-panel'); const canvas = document.querySelector('.script-canvas'); const navigator = document.getElementById('segmentNavigator');
     if (!panel || !canvas || !navigator) return;
+    delete navigator.dataset.activeSegmentIndex;
     navigator.replaceChildren();
     const segments = [...canvas.querySelectorAll('.segment-block')];
     navigator.classList.toggle('hidden', !segments.length);
     if (!segments.length) { updateEditorScrollTools(); return; }
     addChild(navigator, 'span', 'segment-axis-line');
-    const maxScroll = Math.max(1, panel.scrollHeight - panel.clientHeight);
+    const contentHeight = Math.max(1, canvas.scrollHeight);
     segments.forEach((segment, segmentIndex) => {
       const target = Math.max(0, segment.offsetTop + canvas.offsetTop - 24);
-      const marker = addChild(navigator, 'button', 'segment-nav-marker'); marker.type = 'button'; marker.dataset.target = String(target); marker.style.top = `${Math.min(100, target / maxScroll * 100)}%`; marker.title = segment.querySelector('.segment-title')?.textContent || `分段 ${segmentIndex + 1}`;
-      addChild(marker, 'span', 'segment-nav-dot'); addChild(marker, 'span', 'segment-nav-label', marker.title);
-      marker.addEventListener('click', () => panel.scrollTo({ top: target, behavior: 'smooth' }));
+      const label = segment.querySelector('.segment-title')?.textContent || `分段 ${segmentIndex + 1}`;
+      const segmentCenter = segment.offsetTop + segment.offsetHeight / 2;
+      const marker = addChild(navigator, 'button', 'segment-nav-marker'); marker.type = 'button'; marker.dataset.target = String(target); marker.dataset.segmentIndex = String(segmentIndex); marker.style.top = `${Math.max(0, Math.min(100, segmentCenter / contentHeight * 100))}%`; marker.setAttribute('aria-label', label);
+      addChild(marker, 'span', 'segment-nav-dot'); addChild(marker, 'span', 'segment-nav-label', label);
+      marker.addEventListener('click', () => { navigator.dataset.activeSegmentIndex = String(segmentIndex); navigator.querySelectorAll('.segment-nav-marker').forEach((item) => item.classList.toggle('active', item === marker)); panel.scrollTo({ top: target, behavior: 'smooth' }); });
     });
     updateEditorScrollTools();
   });
@@ -1647,6 +1676,7 @@ const baseRenderImportedAssets = renderImportedAssets;
 renderImportedAssets = function () { baseRenderImportedAssets(); };
 document.getElementById('workspaceSwitcher')?.addEventListener('click', openProjectMenu);
 document.querySelector('.script-panel')?.addEventListener('scroll', updateEditorScrollTools, { passive: true });
+document.querySelector('.script-panel')?.addEventListener('wheel', () => { const navigator = document.getElementById('segmentNavigator'); if (navigator) delete navigator.dataset.activeSegmentIndex; }, { passive: true });
 document.getElementById('backToTop')?.addEventListener('click', () => document.querySelector('.script-panel')?.scrollTo({ top: 0, behavior: 'smooth' }));
 window.addEventListener('resize', renderSegmentNavigator);
 document.getElementById('windowMinimize')?.addEventListener('click', () => desktopApi?.minimize()); document.getElementById('windowMaximize')?.addEventListener('click', () => desktopApi?.toggleMaximize()); document.getElementById('windowClose')?.addEventListener('click', () => desktopApi?.closeWindow());

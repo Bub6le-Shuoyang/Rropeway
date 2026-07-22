@@ -70,9 +70,10 @@ test('分段图片会保存素材引用并过滤无效路径', () => {
 });
 
 test('对白文字格式字段会被保存并校正对齐方式', () => {
-  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', text: '重点', textHtml: '<b>重点</b>', textAlign: 'center' }, { type: 'dialogue', text: '码头', textHtml: '<ruby>码头<rt>地点</rt></ruby>' }, { type: 'dialogue', textAlign: 'invalid' }] }] }] });
+  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', text: '重点', textHtml: '<b>重点</b>', textAlign: 'center', note: '这里需要停顿' }, { type: 'dialogue', text: '码头', textHtml: '<ruby>码头<rt>地点</rt></ruby>' }, { type: 'dialogue', textAlign: 'invalid' }] }] }] });
   assert.equal(project.chapters[0].scenes[0].blocks[0].textHtml, '<b>重点</b>');
   assert.equal(project.chapters[0].scenes[0].blocks[0].textAlign, 'center');
+  assert.equal(project.chapters[0].scenes[0].blocks[0].note, '这里需要停顿');
   assert.equal(project.chapters[0].scenes[0].blocks[1].textHtml, '<ruby>码头<rt>地点</rt></ruby>');
   assert.equal(project.chapters[0].scenes[0].blocks[2].textAlign, 'left');
 });
