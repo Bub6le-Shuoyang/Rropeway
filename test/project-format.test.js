@@ -12,7 +12,10 @@ test('默认项目只包含空白编辑结构', () => {
 });
 test('旁白块无需角色字段即可保存', () => {
   const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'narration', text: '雨声逐渐停了。', character: '不应保留' }] }] }] });
-  assert.deepEqual(project.chapters[0].scenes[0].blocks[0], { type: 'narration', text: '雨声逐渐停了。' });
+  const block = project.chapters[0].scenes[0].blocks[0];
+  assert.match(block.id, /^narration-/);
+  assert.equal(block.type, 'narration');
+  assert.equal(block.text, '雨声逐渐停了。');
 });
 
 test('损坏或空项目会被补齐为可编辑结构', () => {
@@ -44,10 +47,10 @@ test('角色代表色和默认立绘会被规范化保存', () => {
 });
 
 test('对白多个状态标签和角色标识会被保存', () => {
-  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', character: '角色A', characterId: 'character-a', statusTags: ['压低声音', '受伤', '受伤', ''] }] }] }] });
+  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', character: '角色A', characterId: 'character-a', statusTags: ['压低声音', '关键节点', '受伤', '受伤', ''] }] }] }] });
   const block = project.chapters[0].scenes[0].blocks[0];
   assert.equal(block.characterId, 'character-a');
-  assert.deepEqual(block.statusTags, ['压低声音', '受伤']);
+  assert.deepEqual(block.statusTags, ['关键节点', '压低声音', '受伤']);
 });
 
 test('对白允许不设置角色', () => {
@@ -61,7 +64,11 @@ test('对白允许不设置角色', () => {
 test('旧情绪标签会迁移为状态标签并支持分段主视角', () => {
   const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', emotion: '紧张' }, { type: 'segment', title: '调查开始', perspectiveCharacterId: 'character-a' }] }] }] });
   assert.deepEqual(project.chapters[0].scenes[0].blocks[0].statusTags, ['紧张']);
-  assert.deepEqual(project.chapters[0].scenes[0].blocks[1], { type: 'segment', title: '调查开始', perspectiveCharacterId: 'character-a', images: [] });
+  const segment = project.chapters[0].scenes[0].blocks[1];
+  assert.match(segment.id, /^segment-/);
+  assert.equal(segment.title, '调查开始');
+  assert.equal(segment.perspectiveCharacterId, 'character-a');
+  assert.deepEqual(segment.images, []);
 });
 
 test('分段图片会保存素材引用并过滤无效路径', () => {
@@ -76,4 +83,17 @@ test('对白文字格式字段会被保存并校正对齐方式', () => {
   assert.equal(project.chapters[0].scenes[0].blocks[0].note, '这里需要停顿');
   assert.equal(project.chapters[0].scenes[0].blocks[1].textHtml, '<ruby>码头<rt>地点</rt></ruby>');
   assert.equal(project.chapters[0].scenes[0].blocks[2].textAlign, 'left');
+});
+
+test('玩家选择会迁移旧选项并保存关键节点关联', () => {
+  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [
+    { id: 'dialogue-key', type: 'dialogue', statusTags: ['关键节点'], text: '抵达灯塔' },
+    { id: 'choice-a', type: 'choice', title: '选择路线', options: ['走海岸', { id: 'option-b', text: '进入隧道', targetBlockId: 'dialogue-key' }] }
+  ] }] }] });
+  const [dialogue, choice] = project.chapters[0].scenes[0].blocks;
+  assert.equal(dialogue.id, 'dialogue-key');
+  assert.equal(choice.id, 'choice-a');
+  assert.equal(choice.options[0].text, '走海岸');
+  assert.equal(choice.options[0].targetBlockId, '');
+  assert.deepEqual(choice.options[1], { id: 'option-b', text: '进入隧道', targetBlockId: 'dialogue-key' });
 });

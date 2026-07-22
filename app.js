@@ -250,12 +250,16 @@ function captureBlocks() {
     if (block.classList.contains('segment-block')) {
       let images = [];
       try { images = JSON.parse(block.dataset.segmentImages || '[]'); } catch {}
-      return { type: 'segment', title: block.querySelector('.segment-title')?.textContent.trim() || '未命名分段', perspectiveCharacterId: block.dataset.perspectiveCharacterId || null, images };
+      return { id: block.dataset.blockId, type: 'segment', title: block.querySelector('.segment-title')?.textContent.trim() || '未命名分段', perspectiveCharacterId: block.dataset.perspectiveCharacterId || null, images };
     }
-    if (block.classList.contains('narration')) return { type: 'narration', text: block.querySelector('.block-content p')?.textContent.trim() || '' };
-    if (block.classList.contains('choice-block')) return { type: 'choice', title: block.querySelector('.choice-title')?.textContent.trim() || '', options: [...block.querySelectorAll('.choices button')].map((item) => item.querySelector('.choice-text')?.textContent.trim() || '') };
+    if (block.classList.contains('narration')) return { id: block.dataset.blockId, type: 'narration', text: block.querySelector('.block-content p')?.textContent.trim() || '' };
+    if (block.classList.contains('choice-block')) {
+      let options = [];
+      try { options = JSON.parse(block.dataset.choiceOptions || '[]'); } catch {}
+      return { id: block.dataset.blockId, type: 'choice', title: block.querySelector('.choice-title')?.textContent.trim() || '', options };
+    }
     const paragraph = block.querySelector('.block-content p');
-    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: richTextPlainText(paragraph), textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^(?:创作备注|注)：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
+    return { id: block.dataset.blockId, type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: richTextPlainText(paragraph), textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^(?:创作备注|注)：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
   });
 }
 
@@ -382,10 +386,113 @@ function perspectiveCharacterIdAt(index) {
   }
   return null;
 }
+function createContentId(prefix) { return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; }
+function orderedStatusTags(tags) {
+  return [...(tags || [])].sort((left, right) => Number(right === '关键节点') - Number(left === '关键节点'));
+}
+function addCriticalNodeTagToActiveDialogue() {
+  const dialogue = activeDialogueBlock();
+  if (!dialogue) { showToast('请先选择一条对白'); return; }
+  dialogue.statusTags ||= [];
+  if (dialogue.statusTags.includes('关键节点')) { showToast('当前对白已经是关键节点'); return; }
+  dialogue.statusTags.unshift('关键节点');
+  renderScene(); renderInspector(); markDirty();
+  showToast('已添加“关键节点”标签');
+}
+function criticalDialogueNodes() {
+  const nodes = [];
+  (desktopState.data?.chapters || []).forEach((chapter, chapterIndex) => {
+    (chapter.scenes || []).forEach((scene, sceneIndex) => {
+      (scene.blocks || []).forEach((block, blockIndex) => {
+        if (block.type !== 'dialogue' || !(block.statusTags || []).includes('关键节点')) return;
+        nodes.push({
+          id: block.id,
+          chapterIndex,
+          chapterId: chapter.id,
+          chapterTitle: chapter.title,
+          sceneIndex,
+          sceneTitle: scene.title,
+          blockIndex,
+          character: block.character || '未设置角色',
+          text: String(block.text || '空对白'),
+          label: `${chapter.title} / ${scene.title} · ${block.character || '未设置角色'}：${String(block.text || '空对白').slice(0, 24)}`
+        });
+      });
+    });
+  });
+  return nodes;
+}
+function navigateToDialogueNode(blockId) {
+  const target = criticalDialogueNodes().find((item) => item.id === blockId);
+  if (!target) { showToast('关联的关键节点不存在或已取消“关键节点”状态'); return; }
+  syncCurrentScene();
+  activeChapterIndex = target.chapterIndex;
+  activeSceneIndex = target.sceneIndex;
+  selectedBlockIndex = target.blockIndex;
+  expandedChapterIds.add(desktopState.data.chapters[target.chapterIndex].id);
+  renderChapters(); renderSceneTabs(); renderScene(); renderInspector();
+  requestAnimationFrame(() => document.querySelector(`.script-block[data-block-index="${target.blockIndex}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+}
+function closeCriticalNodePickers(except = null) {
+  document.querySelectorAll('.choice-target-picker.open').forEach((picker) => { if (picker !== except) picker.classList.remove('open'); });
+}
+function createCriticalNodePicker(parent, option, criticalNodes, onChange) {
+  const picker = addChild(parent, 'div', 'choice-target-picker');
+  const trigger = addChild(picker, 'button', 'choice-target-trigger'); trigger.type = 'button';
+  const triggerCopy = addChild(trigger, 'span', 'choice-target-trigger-copy');
+  const triggerTitle = addChild(triggerCopy, 'b');
+  const triggerDetail = addChild(triggerCopy, 'small');
+  addChild(trigger, 'span', 'choice-target-chevron', '⌄');
+  const panel = addChild(picker, 'div', 'choice-target-panel');
+  const controls = addChild(panel, 'div', 'choice-target-controls');
+  const search = addChild(controls, 'input', 'choice-target-search'); search.type = 'search'; search.placeholder = '搜索角色、场景或对白内容';
+  const chapterFilter = addChild(controls, 'select', 'choice-target-chapter-filter');
+  const allChapters = addChild(chapterFilter, 'option', '', '全部章节'); allChapters.value = '';
+  [...new Map(criticalNodes.map((target) => [target.chapterId, target])).values()].forEach((target) => { const chapterOption = addChild(chapterFilter, 'option', '', target.chapterTitle); chapterOption.value = target.chapterId; });
+  const list = addChild(panel, 'div', 'choice-target-list');
+  const selectedTarget = () => criticalNodes.find((target) => target.id === option.targetBlockId);
+  const updateTrigger = () => {
+    const target = selectedTarget();
+    picker.classList.toggle('has-value', Boolean(option.targetBlockId));
+    triggerTitle.textContent = target ? `${target.character}：${target.text.slice(0, 18)}` : option.targetBlockId ? '关联节点已失效' : '选择关键节点';
+    triggerDetail.textContent = target ? `${target.chapterTitle} / ${target.sceneTitle}` : option.targetBlockId ? '请重新选择目标节点' : '可搜索或按章节筛选';
+  };
+  const chooseTarget = (targetBlockId) => {
+    option.targetBlockId = targetBlockId;
+    updateTrigger();
+    closeCriticalNodePickers();
+    onChange();
+  };
+  const renderList = () => {
+    const query = search.value.trim().toLocaleLowerCase();
+    const chapterId = chapterFilter.value;
+    const filtered = criticalNodes.filter((target) => (!chapterId || target.chapterId === chapterId) && (!query || `${target.chapterTitle} ${target.sceneTitle} ${target.character} ${target.text}`.toLocaleLowerCase().includes(query)));
+    list.replaceChildren();
+    const clear = addChild(list, 'button', `choice-target-item clear${option.targetBlockId ? '' : ' selected'}`); clear.type = 'button';
+    addChild(clear, 'b', '', '不关联关键节点'); addChild(clear, 'small', '', '保留为普通玩家选项'); clear.addEventListener('click', () => chooseTarget(''));
+    if (!filtered.length) { addChild(list, 'div', 'choice-target-empty', '没有找到符合条件的关键节点'); return; }
+    let previousChapterId = null;
+    filtered.forEach((target) => {
+      if (target.chapterId !== previousChapterId) { addChild(list, 'div', 'choice-target-group-title', target.chapterTitle); previousChapterId = target.chapterId; }
+      const item = addChild(list, 'button', `choice-target-item${option.targetBlockId === target.id ? ' selected' : ''}`); item.type = 'button';
+      const copy = addChild(item, 'span'); addChild(copy, 'b', '', `${target.character}：${target.text.slice(0, 34)}`); addChild(copy, 'small', '', target.sceneTitle);
+      addChild(item, 'span', 'choice-target-item-mark', option.targetBlockId === target.id ? '✓' : '');
+      item.addEventListener('click', () => chooseTarget(target.id));
+    });
+  };
+  trigger.addEventListener('click', (event) => { event.stopPropagation(); const opening = !picker.classList.contains('open'); closeCriticalNodePickers(picker); picker.classList.toggle('open', opening); if (opening) { renderList(); requestAnimationFrame(() => search.focus()); } });
+  panel.addEventListener('click', (event) => event.stopPropagation());
+  search.addEventListener('input', renderList);
+  chapterFilter.addEventListener('change', renderList);
+  updateTrigger();
+  return picker;
+}
 function createBlockElement(block, index) {
   const blockClass = block.type === 'choice' ? 'choice-block' : block.type === 'segment' ? 'segment-block' : block.type;
   const wrapper = node('div', `script-block ${blockClass}${index === selectedBlockIndex ? ' selected' : ''}`);
   wrapper.dataset.blockIndex = String(index);
+  wrapper.dataset.blockId = block.id || createContentId(block.type || 'block');
+  block.id = wrapper.dataset.blockId;
   const actions = addChild(wrapper, 'div', 'block-actions');
   const remove = addChild(actions, 'button', 'block-action delete', '\u00d7');
   remove.type = 'button'; remove.title = '\u5220\u9664'; remove.dataset.blockAction = 'delete';
@@ -422,9 +529,39 @@ function createBlockElement(block, index) {
     const paragraph = addChild(content, 'p', 'narration-text', block.text);
     paragraph.dataset.placeholder = '输入旁白内容…';
   } else if (block.type === 'choice') {
-    addChild(wrapper, 'div', 'choice-icon', '↳'); addChild(content, 'span', 'block-type', '玩家选择'); addChild(content, 'p', 'choice-title', block.title);
+    block.options = Array.isArray(block.options) ? block.options.map((option) => typeof option === 'string' ? { id: createContentId('choice-option'), text: option, targetBlockId: '' } : { id: option.id || createContentId('choice-option'), text: option.text || '', targetBlockId: option.targetBlockId || '' }) : [];
+    wrapper.dataset.choiceOptions = JSON.stringify(block.options);
+    addChild(wrapper, 'div', 'choice-icon', '↳'); addChild(content, 'span', 'block-type', '玩家选择'); addChild(content, 'p', 'choice-title', block.title || '玩家将如何选择？');
     const choices = addChild(content, 'div', 'choices');
-    (block.options || []).forEach((option) => { const button = addChild(choices, 'button'); addChild(button, 'span', 'choice-text', option); addChild(button, 'span', '', '→'); });
+    const criticalNodes = criticalDialogueNodes();
+    const syncChoiceOptions = () => { wrapper.dataset.choiceOptions = JSON.stringify(block.options); markDirty(); };
+    block.options.forEach((option, optionIndex) => {
+      const row = addChild(choices, 'div', 'choice-option-row');
+      const textInput = addChild(row, 'input', 'choice-option-text'); textInput.value = option.text; textInput.placeholder = `选项 ${optionIndex + 1}`;
+      textInput.addEventListener('input', () => { option.text = textInput.value; syncChoiceOptions(); });
+      let jump = null;
+      createCriticalNodePicker(row, option, criticalNodes, () => { syncChoiceOptions(); jump.disabled = !option.targetBlockId; });
+      jump = addChild(row, 'button', 'choice-option-jump', '↗'); jump.type = 'button'; jump.title = '定位关联节点'; jump.disabled = !option.targetBlockId;
+      jump.addEventListener('click', () => navigateToDialogueNode(option.targetBlockId));
+      const removeOption = addChild(row, 'button', 'choice-option-remove', '×'); removeOption.type = 'button'; removeOption.title = '删除选项';
+      removeOption.addEventListener('click', () => {
+        syncCurrentScene();
+        const liveChoice = currentScene()?.blocks?.find((item) => item.id === block.id);
+        if (!liveChoice) return;
+        liveChoice.options = (liveChoice.options || []).filter((item) => item.id !== option.id);
+        renderScene(); markDirty();
+      });
+    });
+    const addOption = addChild(content, 'button', 'choice-option-add', '＋ 添加选项'); addOption.type = 'button';
+    addOption.addEventListener('click', () => {
+      syncCurrentScene();
+      const liveChoice = currentScene()?.blocks?.find((item) => item.id === block.id);
+      if (!liveChoice) return;
+      liveChoice.options ||= [];
+      liveChoice.options.push({ id: createContentId('choice-option'), text: '', targetBlockId: '' });
+      renderScene(); markDirty();
+      requestAnimationFrame(() => document.querySelector(`.script-block[data-block-index="${index}"] .choice-option-row:last-child input`)?.focus());
+    });
   } else {
     const character = (desktopState.data?.characters || []).find((item) => item.id === block.characterId || item.name === block.character);
     const hasCharacter = Boolean(character || String(block.character || '').trim());
@@ -437,7 +574,7 @@ function createBlockElement(block, index) {
       const thumb = addChild(meta, 'div', 'character-thumb', (block.character || character?.name || '').slice(0, 1)); thumb.style.background = block.characterColor || character?.color || '#f2674f';
       const nameNode = addChild(meta, 'span', 'character-name', block.character || character?.name || ''); nameNode.style.color = block.characterColor || character?.color || '#f2674f';
     } else addChild(meta, 'span', 'unassigned-character-hint', '未设置角色');
-    if (isPerspective) addChild(meta, 'span', 'pov-pill', '主视角'); (block.statusTags || []).forEach((statusTag) => addChild(meta, 'span', 'status-pill', statusTag)); addChild(meta, 'span', 'voice-pill', `♪ ${block.voice || '未设定'}`);
+    if (isPerspective) addChild(meta, 'span', 'pov-pill', '主视角'); orderedStatusTags(block.statusTags).forEach((statusTag) => addChild(meta, 'span', `status-pill${statusTag === '关键节点' ? ' critical-node-tag' : ''}`, statusTag)); addChild(meta, 'span', 'voice-pill', `♪ ${block.voice || '未设定'}`);
     const paragraph = addChild(content, 'p');
     if (block.textHtml) paragraph.innerHTML = sanitizeRichTextHtml(block.textHtml); else paragraph.textContent = block.text || '';
     paragraph.style.textAlign = block.textAlign || 'left';
@@ -879,7 +1016,11 @@ function updatePreview() {
   speaker.textContent = block?.type === 'dialogue' ? block.character : block?.type === 'narration' ? '旁白' : '';
   text.textContent = block?.type === 'choice' ? block.title : block?.text || '当前场景没有可预览内容。';
   options.replaceChildren();
-  if (block?.type === 'choice') (block.options || []).forEach((optionText) => addChild(options, 'button', '', optionText));
+  if (block?.type === 'choice') (block.options || []).forEach((option) => {
+    const value = typeof option === 'string' ? { text: option, targetBlockId: '' } : option;
+    const button = addChild(options, 'button', '', value.text || '未命名选项');
+    if (value.targetBlockId) button.addEventListener('click', () => { document.getElementById('previewModal').classList.add('hidden'); navigateToDialogueNode(value.targetBlockId); });
+  });
   if (scene?.background && desktopState.filePath) desktopApi.readAsset(desktopState.filePath, scene.background).then((src) => { if (src) stage.style.backgroundImage = `linear-gradient(180deg, transparent 35%, rgba(30,35,33,.55)), url("${src}")`; }).catch(() => {});
   if (block?.portrait && desktopState.filePath) {
     desktopApi.readAsset(desktopState.filePath, block.portrait).then((src) => { if (src) { character.className = 'preview-character'; character.style.background = `center bottom / contain no-repeat url("${src}")`; } }).catch(() => {});
@@ -919,16 +1060,25 @@ document.addEventListener('click', (event) => {
   if (event.target.closest('#addDialogue')) {
     syncCurrentScene();
     const character = desktopState.data.characters?.find((item) => item.id === newDialogueCharacterId);
-    currentScene().blocks.push({ type: 'dialogue', character: character?.name || '', characterId: character?.id || '', characterKey: 'mei', characterColor: character?.color || '#b8bcb8', portraitPreset: character?.portraitPreset || null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' });
+    currentScene().blocks.push({ id: createContentId('dialogue'), type: 'dialogue', character: character?.name || '', characterId: character?.id || '', characterKey: 'mei', characterColor: character?.color || '#b8bcb8', portraitPreset: character?.portraitPreset || null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' });
     selectedBlockIndex = currentScene().blocks.length - 1;
     renderScene();
     revealNewBlock(selectedBlockIndex, '.block-content p');
     markDirty();
     showToast('已添加一条对白');
   }
+  if (event.target.closest('#addChoice')) {
+    syncCurrentScene();
+    currentScene().blocks.push({ id: createContentId('choice'), type: 'choice', title: '玩家将如何选择？', options: [{ id: createContentId('choice-option'), text: '', targetBlockId: '' }, { id: createContentId('choice-option'), text: '', targetBlockId: '' }] });
+    selectedBlockIndex = currentScene().blocks.length - 1;
+    renderScene();
+    revealNewBlock(selectedBlockIndex, '.choice-option-text');
+    markDirty();
+    showToast('已添加玩家选择');
+  }
   if (event.target.closest('#addNarration')) {
     syncCurrentScene();
-    currentScene().blocks.push({ type: 'narration', text: '' });
+    currentScene().blocks.push({ id: createContentId('narration'), type: 'narration', text: '' });
     selectedBlockIndex = currentScene().blocks.length - 1;
     renderScene();
     revealNewBlock(selectedBlockIndex, '.narration-text');
@@ -938,7 +1088,7 @@ document.addEventListener('click', (event) => {
   if (event.target.closest('#addSegment')) {
     syncCurrentScene();
     const segmentNumber = currentScene().blocks.filter((item) => item.type === 'segment').length + 1;
-    currentScene().blocks.push({ type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null });
+    currentScene().blocks.push({ id: createContentId('segment'), type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null });
     selectedBlockIndex = currentScene().blocks.length - 1;
     renderScene();
     revealNewBlock(selectedBlockIndex, '.segment-title');
@@ -1170,7 +1320,7 @@ document.getElementById('projectCreateForm')?.addEventListener('submit', createP
 document.getElementById('chooseProjectLocationBtn')?.addEventListener('click', async () => { const directory = await desktopApi.chooseProjectDirectory(); if (directory) document.getElementById('projectCreateLocation').value = directory; });
 document.getElementById('openProjectFromHomeBtn')?.addEventListener('click', openProject);
 document.getElementById('previewBtn')?.addEventListener('click', () => { updatePreview(); document.getElementById('previewModal').classList.remove('hidden'); }); document.getElementById('closePreview')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden')); document.querySelector('.modal-backdrop')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden'));
-document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); closeWindowSettingsMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); closeWindowProjectMenu(); setWindowSettingsMenuOpen(true); } });
+document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (withCommand && event.shiftKey && key === 'k') { event.preventDefault(); addCriticalNodeTagToActiveDialogue(); return; } if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeCriticalNodePickers(); closeWindowProjectMenu(); closeWindowSettingsMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); closeWindowProjectMenu(); setWindowSettingsMenuOpen(true); } });
 applyThemePreference(currentThemePreference(), false);
 applyInterfaceScale(Number(localStorage.getItem('rropeway-interface-scale') || 100), false);
 applyEditorPreferences(currentEditorPreferences(), false);
@@ -1407,6 +1557,10 @@ function renderInspector() {
     if (header) header.textContent = '旁白';
     const properties = createInspectorSection(body, '当前旁白', '', 'properties');
     addChild(properties, 'div', 'inspector-empty compact', '旁白无需设置角色、状态标签或立绘，直接在左侧编辑内容。');
+  } else if (selectedBlock?.type === 'choice') {
+    if (header) header.textContent = '玩家选择';
+    const properties = createInspectorSection(body, '分支关联', '', 'properties');
+    addChild(properties, 'div', 'inspector-empty compact', '直接在左侧选择组件中添加、删除选项，并为每个选项关联全仓库的“关键节点”对白。');
   } else {
     if (header) header.textContent = '对白属性';
     dialogueBlock = activeDialogueBlock();
@@ -1419,11 +1573,11 @@ function renderInspector() {
       const noCharacter = addChild(characterSelect, 'option', '', '未设置角色'); noCharacter.value = ''; noCharacter.selected = !dialogueBlock.characterId && !dialogueBlock.character;
       characters.forEach((character) => { const option = addChild(characterSelect, 'option', '', character.name); option.value = character.id; if (character.name === dialogueBlock.character) option.selected = true; });
       characterSelect.addEventListener('change', () => { const character = characters.find((item) => item.id === characterSelect.value); if (character) applyCharacterToBlock(character, dialogueBlock); else { dialogueBlock.character = ''; dialogueBlock.characterId = ''; dialogueBlock.characterColor = '#b8bcb8'; dialogueBlock.portraitPreset = null; dialogueBlock.portrait = undefined; } renderScene(); markDirty(); });
-      const statusGroup = addChild(properties, 'div', 'property-group'); addChild(statusGroup, 'label', '', '状态标签');
+      const statusGroup = addChild(properties, 'div', 'property-group'); const statusLabel = addChild(statusGroup, 'label', 'status-label-row'); addChild(statusLabel, 'span', '', '状态标签'); addChild(statusLabel, 'kbd', 'status-shortcut', 'Ctrl/⌘ + Shift + K');
       const statusEditor = addChild(statusGroup, 'div', 'status-tag-editor');
-      (dialogueBlock.statusTags || []).forEach((statusTag, tagIndex) => { const chip = addChild(statusEditor, 'span', 'status-tag-chip'); addChild(chip, 'span', '', statusTag); const removeTag = addChild(chip, 'button', '', '×'); removeTag.type = 'button'; removeTag.title = '删除标签'; removeTag.addEventListener('click', () => { dialogueBlock.statusTags.splice(tagIndex, 1); renderScene(); markDirty(); }); });
+      orderedStatusTags(dialogueBlock.statusTags).forEach((statusTag) => { const chip = addChild(statusEditor, 'span', `status-tag-chip${statusTag === '关键节点' ? ' critical-node-tag' : ''}`); addChild(chip, 'span', '', statusTag); const removeTag = addChild(chip, 'button', '', '×'); removeTag.type = 'button'; removeTag.title = '删除标签'; removeTag.addEventListener('click', () => { const tagIndex = dialogueBlock.statusTags.indexOf(statusTag); if (tagIndex >= 0) dialogueBlock.statusTags.splice(tagIndex, 1); renderScene(); markDirty(); }); });
       const statusInput = addChild(statusEditor, 'input', 'status-tag-input'); statusInput.placeholder = '输入后按回车或点击其他位置';
-      const commitStatusTag = (refocus) => { const value = statusInput.value.trim(); if (!value) return; dialogueBlock.statusTags ||= []; if (dialogueBlock.statusTags.includes(value)) { statusInput.value = ''; return; } dialogueBlock.statusTags.push(value); renderScene(); markDirty(); if (refocus) requestAnimationFrame(() => document.querySelector('.status-tag-input')?.focus()); };
+      const commitStatusTag = (refocus) => { const value = statusInput.value.trim(); if (!value) return; dialogueBlock.statusTags ||= []; if (dialogueBlock.statusTags.includes(value)) { statusInput.value = ''; return; } if (value === '关键节点') dialogueBlock.statusTags.unshift(value); else dialogueBlock.statusTags.push(value); renderScene(); markDirty(); if (refocus) requestAnimationFrame(() => document.querySelector('.status-tag-input')?.focus()); };
       statusInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); commitStatusTag(true); } }); statusInput.addEventListener('blur', () => setTimeout(() => commitStatusTag(false), 0));
       const voiceGroup = addChild(properties, 'div', 'property-group'); addChild(voiceGroup, 'label', '', '语音提示'); const voiceSelect = addChild(voiceGroup, 'select', 'select-control editor-select'); ['女声 · 轻', '女声 · 强', '男声 · 低', '男声 · 清晰', '无语音'].forEach((voice) => { const option = addChild(voiceSelect, 'option', '', voice); option.value = voice; option.selected = dialogueBlock.voice === voice; }); voiceSelect.addEventListener('change', () => { dialogueBlock.voice = voiceSelect.value; renderScene(); markDirty(); });
       const assetGroup = addChild(properties, 'div', 'property-group'); addChild(assetGroup, 'label', '', '当前立绘'); const assetSelect = addChild(assetGroup, 'select', 'select-control editor-select');
@@ -1436,7 +1590,7 @@ function renderInspector() {
       const noteGroup = addChild(properties, 'div', 'property-group'); addChild(noteGroup, 'label', '', '创作备注'); const note = addChild(noteGroup, 'textarea', '', dialogueBlock.note || ''); note.placeholder = '给自己留下一句创作提示…'; note.addEventListener('input', () => { dialogueBlock.note = note.value; syncDialogueNoteDisplay(noteBlockIndex, note.value); markDirty(); });
     }
   }
-  if (selectedBlock?.type !== 'narration') renderTextFormattingSettings(body, dialogueBlock);
+  if (selectedBlock?.type !== 'narration' && selectedBlock?.type !== 'choice') renderTextFormattingSettings(body, dialogueBlock);
   requestAnimationFrame(() => clampFloatingInspectorSections());
 }
 function applyCharacterToBlock(character, block) {
@@ -1705,6 +1859,7 @@ document.addEventListener('dragover', (event) => { const block = event.target.cl
 document.addEventListener('drop', (event) => { const target = event.target.closest('.script-block'); if (!target || draggedBlockIndex === null) return; event.preventDefault(); const targetIndex = Number(target.dataset.blockIndex); syncCurrentScene(); const scene = currentScene(); if (targetIndex !== draggedBlockIndex) { const [moved] = scene.blocks.splice(draggedBlockIndex, 1); scene.blocks.splice(targetIndex, 0, moved); selectedBlockIndex = targetIndex; renderScene(); markDirty(); showToast('对白顺序已调整'); } draggedBlockIndex = null; });
 document.addEventListener('dragend', () => { draggedBlockIndex = null; document.querySelectorAll('.script-block').forEach((item) => item.classList.remove('drag-over', 'dragging')); });
 document.addEventListener('click', (event) => {
+  if (!event.target.closest('.choice-target-picker')) closeCriticalNodePickers();
   const action = event.target.closest('[data-block-action]');
   if (action) {
     event.preventDefault();
