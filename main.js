@@ -58,13 +58,16 @@ async function importAssetFiles(projectPath, imageOnly = false) {
   const extensions = imageOnly ? ['png', 'jpg', 'jpeg', 'webp', 'gif'] : ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp3', 'wav', 'ogg'];
   const result = await dialog.showOpenDialog(mainWindow, { title: imageOnly ? '选择分段图片' : '导入本地素材', properties: ['openFile', 'multiSelections'], filters: [{ name: imageOnly ? '图片' : '图片与音频', extensions }] });
   if (result.canceled) return [];
-  const assetDir = path.join(path.dirname(projectPath), 'assets');
-  await fs.mkdir(assetDir, { recursive: true });
   const imported = [];
   for (const source of result.filePaths) {
+    const extension = path.extname(source).slice(1).toLowerCase();
+    const assetKind = ['mp3', 'wav', 'ogg'].includes(extension) ? 'audio' : 'images';
+    const assetDir = path.join(path.dirname(projectPath), 'assets', assetKind);
+    await fs.mkdir(assetDir, { recursive: true });
     const safeName = `${crypto.randomUUID()}-${path.basename(source).replace(/[^\w.\-\u4e00-\u9fff]/g, '_')}`;
     await fs.copyFile(source, path.join(assetDir, safeName));
-    imported.push({ id: crypto.randomUUID(), name: path.basename(source), fileName: safeName, relativePath: path.join('assets', safeName).replaceAll('\\', '/'), type: path.extname(source).slice(1).toLowerCase() });
+    const relativePath = path.join('assets', assetKind, safeName).replaceAll('\\', '/');
+    imported.push({ id: crypto.randomUUID(), name: path.basename(source), fileName: relativePath, relativePath, type: extension });
   }
   return imported;
 }
@@ -130,6 +133,12 @@ ipcMain.handle('asset:import', async (_event, { projectPath }) => {
   return importAssetFiles(projectPath, false);
 });
 ipcMain.handle('asset:import-images', async (_event, { projectPath }) => importAssetFiles(projectPath, true));
+ipcMain.handle('asset:delete', async (_event, { projectPath, relativePath }) => {
+  const normalizedPath = String(relativePath || '').replaceAll('\\', '/');
+  if (!normalizedPath.startsWith('assets/')) throw new Error('只允许删除项目素材目录中的文件');
+  await trashIfExists(projectAssetPath(projectPath, normalizedPath));
+  return true;
+});
 ipcMain.handle('asset:read', async (_event, { projectPath, relativePath }) => {
   const filePath = projectAssetPath(projectPath, relativePath);
   const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }[path.extname(filePath).toLowerCase()];

@@ -19,12 +19,13 @@ let suppressDeleteConfirmation = false;
 let newDialogueCharacterId = '';
 let savedTextRange = null;
 let savedTextBlockIndex = null;
+let segmentSlideshowTimers = new Set();
 const expandedChapterIds = new Set();
 let draggedChapterId = null;
 let draggedSceneInfo = null;
 let ignoreTreeClickUntil = 0;
 const EDITOR_PREFERENCES_STORAGE_KEY = 'rropeway-editor-preferences';
-const DEFAULT_EDITOR_PREFERENCES = { fontSize: 16, letterSpacing: 0, paragraphSpacing: 10, annotationSize: 9 };
+const DEFAULT_EDITOR_PREFERENCES = { fontSize: 16, letterSpacing: 0, paragraphSpacing: 10, annotationSize: 9, slideshowInterval: 5 };
 
 function normalizeEditorPreferences(value = {}) {
   const clamp = (input, minimum, maximum, fallback) => Math.min(maximum, Math.max(minimum, Number.isFinite(Number(input)) ? Number(input) : fallback));
@@ -32,7 +33,8 @@ function normalizeEditorPreferences(value = {}) {
     fontSize: clamp(value.fontSize, 12, 30, DEFAULT_EDITOR_PREFERENCES.fontSize),
     letterSpacing: clamp(value.letterSpacing, -1, 5, DEFAULT_EDITOR_PREFERENCES.letterSpacing),
     paragraphSpacing: clamp(value.paragraphSpacing, 0, 36, DEFAULT_EDITOR_PREFERENCES.paragraphSpacing),
-    annotationSize: clamp(value.annotationSize, 6, 16, DEFAULT_EDITOR_PREFERENCES.annotationSize)
+    annotationSize: clamp(value.annotationSize, 6, 16, DEFAULT_EDITOR_PREFERENCES.annotationSize),
+    slideshowInterval: clamp(value.slideshowInterval, 2, 30, DEFAULT_EDITOR_PREFERENCES.slideshowInterval)
   };
 }
 function currentEditorPreferences() {
@@ -65,6 +67,34 @@ function currentChapter() { return desktopState.data?.chapters?.[activeChapterIn
 function currentScene() { return currentChapter()?.scenes?.[activeSceneIndex]; }
 function node(tag, className, text) { const item = document.createElement(tag); if (className) item.className = className; if (text !== undefined) item.textContent = text; return item; }
 function addChild(parent, tag, className, text) { const item = node(tag, className, text); parent.appendChild(item); return item; }
+function clearSegmentSlideshows() {
+  segmentSlideshowTimers.forEach((timer) => clearInterval(timer));
+  segmentSlideshowTimers.clear();
+}
+function setupSegmentSlideshow(gallery, imageCount) {
+  if (imageCount < 2) return;
+  const track = gallery.querySelector('.segment-image-track');
+  const dots = [...gallery.querySelectorAll('.segment-image-dot')];
+  let activeIndex = 0;
+  let timer = null;
+  const showImage = (index) => {
+    activeIndex = (index + imageCount) % imageCount;
+    track.style.transform = `translateX(-${activeIndex * 100}%)`;
+    dots.forEach((dot, dotIndex) => dot.classList.toggle('active', dotIndex === activeIndex));
+  };
+  const stop = () => { if (timer) { clearInterval(timer); segmentSlideshowTimers.delete(timer); } timer = null; };
+  const start = () => {
+    stop();
+    timer = setInterval(() => showImage(activeIndex + 1), currentEditorPreferences().slideshowInterval * 1000);
+    segmentSlideshowTimers.add(timer);
+  };
+  gallery.querySelector('.segment-image-previous')?.addEventListener('click', () => { showImage(activeIndex - 1); start(); });
+  gallery.querySelector('.segment-image-next')?.addEventListener('click', () => { showImage(activeIndex + 1); start(); });
+  dots.forEach((dot, dotIndex) => dot.addEventListener('click', () => { showImage(dotIndex); start(); }));
+  gallery.addEventListener('mouseenter', stop);
+  gallery.addEventListener('mouseleave', start);
+  start();
+}
 function requestTextInput(title, initialValue = '') {
   return new Promise((resolve) => {
     const overlay = node('div', 'editor-dialog-overlay');
@@ -312,13 +342,22 @@ function createBlockElement(block, index) {
     addChild(content, 'small', 'segment-perspective', perspective ? `主视角：${perspective.name}` : '未设置主视角');
     if (block.perspectiveCharacterId) wrapper.dataset.perspectiveCharacterId = block.perspectiveCharacterId;
     if (images.length) {
-      const gallery = addChild(content, 'div', 'segment-image-gallery');
+      const gallery = addChild(content, 'div', 'segment-image-gallery segment-image-carousel');
+      const viewport = addChild(gallery, 'div', 'segment-image-viewport');
+      const track = addChild(viewport, 'div', 'segment-image-track');
       images.forEach((image) => {
-        const figure = addChild(gallery, 'figure', 'segment-image-card');
+        const figure = addChild(track, 'figure', 'segment-image-card segment-image-slide');
         const imageNode = addChild(figure, 'img'); imageNode.alt = image.name || '分段图片';
         addChild(figure, 'figcaption', '', image.name || '未命名图片');
         if (desktopState.filePath && image.relativePath) desktopApi.readAsset(desktopState.filePath, image.relativePath).then((src) => { if (src) imageNode.src = src; }).catch(() => figure.classList.add('asset-missing'));
       });
+      if (images.length > 1) {
+        const previous = addChild(gallery, 'button', 'segment-image-nav segment-image-previous', '‹'); previous.type = 'button'; previous.title = '上一张';
+        const next = addChild(gallery, 'button', 'segment-image-nav segment-image-next', '›'); next.type = 'button'; next.title = '下一张';
+        const dots = addChild(gallery, 'div', 'segment-image-dots');
+        images.forEach((_image, imageIndex) => { const dot = addChild(dots, 'button', `segment-image-dot${imageIndex === 0 ? ' active' : ''}`); dot.type = 'button'; dot.title = `查看第 ${imageIndex + 1} 张`; });
+      }
+      setupSegmentSlideshow(gallery, images.length);
     }
   } else if (block.type === 'narration') {
     const paragraph = addChild(content, 'p', 'narration-text', block.text);
@@ -352,6 +391,7 @@ function createBlockElement(block, index) {
 }
 
 function renderScene() {
+  clearSegmentSlideshows();
   const scene = currentScene(); if (!scene) return;
   const canvas = document.querySelector('.script-canvas'); const addButton = document.getElementById('flowAddActions');
   canvas.querySelectorAll('.script-block').forEach((block) => block.remove());
@@ -523,13 +563,20 @@ function renderChapters() {
 }
 
 function renderImportedAssets() {
-  const grid = document.querySelector('.asset-grid'); grid.querySelectorAll('[data-imported="true"]').forEach((item) => item.remove());
+  const grid = document.querySelector('.asset-grid'); if (!grid) return; grid.querySelectorAll('[data-imported="true"]').forEach((item) => item.remove());
+  if (!(desktopState.data?.assets || []).length) {
+    const empty = node('div', 'asset-library-empty'); empty.dataset.imported = 'true';
+    addChild(empty, 'b', '', '素材库还是空的'); addChild(empty, 'span', '', '导入图片后会复制到当前项目的 assets/images 目录。');
+    grid.appendChild(empty);
+    return;
+  }
   (desktopState.data?.assets || []).forEach((asset) => {
     const card = node('div', 'asset-card imported-asset'); card.dataset.imported = 'true'; card.dataset.assetId = asset.id;
     const kind = ['mp3', 'wav', 'ogg'].includes(asset.type) ? '音效' : '图片'; addChild(card, 'span', '', kind); addChild(card, 'b', '', asset.name);
     const actions = addChild(card, 'div', 'asset-actions');
     if (kind === '图片') { const background = addChild(actions, 'button', 'asset-action', '设为背景'); background.addEventListener('click', () => bindAsset(asset, 'background')); const portrait = addChild(actions, 'button', 'asset-action', '设为立绘'); portrait.addEventListener('click', () => bindAsset(asset, 'portrait')); }
     const show = addChild(actions, 'button', 'asset-action', '打开位置'); show.addEventListener('click', () => desktopApi?.showItem(desktopState.filePath, asset.relativePath));
+    const remove = addChild(actions, 'button', 'asset-action danger', '删除'); remove.addEventListener('click', () => deleteAsset(asset));
     if (desktopState.filePath && kind === '图片') desktopApi.readAsset(desktopState.filePath, asset.relativePath).then((src) => { if (src) card.style.backgroundImage = `linear-gradient(180deg, transparent 25%, rgba(30,35,33,.7)), url("${src}")`; }).catch(() => {});
     grid.appendChild(card);
   });
@@ -545,6 +592,21 @@ function setDialogueCharacterMenuOpen(open) {
   menu.hidden = !open;
   menu.classList.toggle('hidden', !open);
   button.setAttribute('aria-expanded', String(open));
+}
+function removeAssetReferences(relativePath) {
+  return window.RropewayAssetReferences.removeAssetReferences(desktopState.data, relativePath);
+}
+async function deleteAsset(asset) {
+  if (!desktopState.filePath || !asset?.relativePath) return;
+  const confirmed = await requestConfirmation(`确定删除素材“${asset.name}”吗？\n素材文件会移入回收站，并从场景、对白和分段中移除全部引用。`);
+  if (!confirmed) return;
+  try {
+    await desktopApi.deleteAsset(desktopState.filePath, asset.relativePath);
+    const referenceCount = removeAssetReferences(asset.relativePath);
+    desktopState.data.assets = desktopState.data.assets.filter((item) => item.id !== asset.id);
+    renderImportedAssets(); renderScene(); renderInspector(); markDirty();
+    showToast(referenceCount ? `素材已删除，并清理 ${referenceCount} 处引用` : '素材已删除');
+  } catch (error) { showToast(error.message || '素材删除失败'); }
 }
 function syncDialogueCreationState() {
   const addButton = document.getElementById('addDialogue');
@@ -830,7 +892,8 @@ function openEditorPreferencesDialog() {
     { key: 'fontSize', label: '默认字号', description: '对白和旁白正文的基础字号', min: 12, max: 30, step: 1, unit: 'px' },
     { key: 'letterSpacing', label: '文字间距', description: '调整每个字符之间的距离', min: -1, max: 5, step: 0.1, unit: 'px' },
     { key: 'paragraphSpacing', label: '段落间距', description: '正文段落之间及角色信息后的留白', min: 0, max: 36, step: 1, unit: 'px' },
-    { key: 'annotationSize', label: '上方注释字号', description: '显示在正文上方的小型注释文字', min: 6, max: 16, step: 1, unit: 'px' }
+    { key: 'annotationSize', label: '上方注释字号', description: '显示在正文上方的小型注释文字', min: 6, max: 16, step: 1, unit: 'px' },
+    { key: 'slideshowInterval', label: '分段图片轮播', description: '多张分段图片自动切换的时间间隔', min: 2, max: 30, step: 1, unit: '秒' }
   ];
   const initial = currentEditorPreferences();
   const inputs = {};
@@ -859,7 +922,7 @@ function openEditorPreferencesDialog() {
   reset.addEventListener('click', () => { Object.entries(inputs).forEach(([key, input]) => { input.range.value = String(DEFAULT_EDITOR_PREFERENCES[key]); input.number.value = String(DEFAULT_EDITOR_PREFERENCES[key]); }); updatePreview(); });
   cancel.addEventListener('click', dismiss);
   close.addEventListener('click', dismiss);
-  save.addEventListener('click', () => { applyEditorPreferences(Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.number.value]))); dismiss(); showToast('编辑器偏好已保存'); });
+  save.addEventListener('click', () => { applyEditorPreferences(Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.number.value]))); renderScene(); dismiss(); showToast('编辑器偏好已保存'); });
   overlay.addEventListener('click', (event) => { if (event.target === overlay) dismiss(); });
   updatePreview();
 }

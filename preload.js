@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('scriptroom', {
   saveProject: (payload) => ipcRenderer.invoke('project:save', payload),
   importAssets: (projectPath) => ipcRenderer.invoke('asset:import', { projectPath }),
   importImages: (projectPath) => ipcRenderer.invoke('asset:import-images', { projectPath }),
+  deleteAsset: (projectPath, relativePath) => ipcRenderer.invoke('asset:delete', { projectPath, relativePath }),
   readAsset: (projectPath, relativePath) => ipcRenderer.invoke('asset:read', { projectPath, relativePath }),
   showItem: (projectPath, relativePath) => ipcRenderer.invoke('shell:show-item', { projectPath, relativePath }),
   setDirty: (dirty) => ipcRenderer.send('window:set-dirty', dirty),
