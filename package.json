@@ -1,6 +1,6 @@
 {
   "name": "rropeway-desktop",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "离线游戏对话脚本编辑器",
   "main": "main.js",
   "scripts": {

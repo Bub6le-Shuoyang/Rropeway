@@ -23,6 +23,32 @@ const expandedChapterIds = new Set();
 let draggedChapterId = null;
 let draggedSceneInfo = null;
 let ignoreTreeClickUntil = 0;
+const EDITOR_PREFERENCES_STORAGE_KEY = 'rropeway-editor-preferences';
+const DEFAULT_EDITOR_PREFERENCES = { fontSize: 16, letterSpacing: 0, paragraphSpacing: 10, annotationSize: 9 };
+
+function normalizeEditorPreferences(value = {}) {
+  const clamp = (input, minimum, maximum, fallback) => Math.min(maximum, Math.max(minimum, Number.isFinite(Number(input)) ? Number(input) : fallback));
+  return {
+    fontSize: clamp(value.fontSize, 12, 30, DEFAULT_EDITOR_PREFERENCES.fontSize),
+    letterSpacing: clamp(value.letterSpacing, -1, 5, DEFAULT_EDITOR_PREFERENCES.letterSpacing),
+    paragraphSpacing: clamp(value.paragraphSpacing, 0, 36, DEFAULT_EDITOR_PREFERENCES.paragraphSpacing),
+    annotationSize: clamp(value.annotationSize, 6, 16, DEFAULT_EDITOR_PREFERENCES.annotationSize)
+  };
+}
+function currentEditorPreferences() {
+  try { return normalizeEditorPreferences(JSON.parse(localStorage.getItem(EDITOR_PREFERENCES_STORAGE_KEY) || '{}')); }
+  catch { return { ...DEFAULT_EDITOR_PREFERENCES }; }
+}
+function applyEditorPreferences(value, persist = true) {
+  const preferences = normalizeEditorPreferences(value);
+  const root = document.documentElement;
+  root.style.setProperty('--editor-font-size', `${preferences.fontSize}px`);
+  root.style.setProperty('--editor-letter-spacing', `${preferences.letterSpacing}px`);
+  root.style.setProperty('--editor-paragraph-spacing', `${preferences.paragraphSpacing}px`);
+  root.style.setProperty('--editor-annotation-size', `${preferences.annotationSize}px`);
+  if (persist) localStorage.setItem(EDITOR_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+  return preferences;
+}
 
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('show'), 2400); }
 function setSaveStatus(status) { document.getElementById('saveStatus').textContent = status; }
@@ -140,7 +166,7 @@ function captureBlocks() {
     if (block.classList.contains('narration')) return { type: 'narration', text: block.querySelector('.block-content p')?.textContent.trim() || '' };
     if (block.classList.contains('choice-block')) return { type: 'choice', title: block.querySelector('.choice-title')?.textContent.trim() || '', options: [...block.querySelectorAll('.choices button')].map((item) => item.querySelector('.choice-text')?.textContent.trim() || '') };
     const paragraph = block.querySelector('.block-content p');
-    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: paragraph?.textContent.trim() || '', textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
+    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: richTextPlainText(paragraph), textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
   });
 }
 
@@ -178,11 +204,17 @@ function requestDeleteConfirmation(message) {
     document.body.appendChild(overlay);
   });
 }
+function richTextPlainText(element) {
+  if (!element) return '';
+  const clone = element.cloneNode(true);
+  clone.querySelectorAll('rt').forEach((annotation) => annotation.remove());
+  return clone.textContent.trim();
+}
 function sanitizeRichTextHtml(html) {
   const source = document.createElement('template');
   const output = document.createElement('div');
   source.innerHTML = String(html || '');
-  const allowedTags = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'SPAN', 'FONT', 'SUP', 'SUB', 'BR']);
+  const allowedTags = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'SPAN', 'FONT', 'SUP', 'SUB', 'RUBY', 'RT', 'BR']);
   const copySafeNode = (sourceNode, targetParent) => {
     if (sourceNode.nodeType === Node.TEXT_NODE) { targetParent.appendChild(document.createTextNode(sourceNode.textContent)); return; }
     if (sourceNode.nodeType !== Node.ELEMENT_NODE || ['SCRIPT', 'STYLE'].includes(sourceNode.tagName)) return;
@@ -524,15 +556,15 @@ function syncDialogueCreationState() {
   if (!characters.some((character) => character.id === newDialogueCharacterId)) newDialogueCharacterId = '';
   const selectedCharacter = characters.find((character) => character.id === newDialogueCharacterId);
   avatar.textContent = selectedCharacter ? selectedCharacter.name.slice(0, 1) : '—';
-  avatar.style.background = selectedCharacter?.color || '#e6e8e5';
-  avatar.style.color = selectedCharacter ? '#fff' : '#9da29d';
+  avatar.style.background = selectedCharacter?.color || '#ffe5da';
+  avatar.style.color = selectedCharacter ? '#fff' : '#c96c56';
   label.textContent = selectedCharacter?.name || '不设置角色';
   menu.replaceChildren();
   addChild(menu, 'div', 'dialogue-character-menu-title', '新增对白角色');
   const addOption = (character) => {
     const characterId = character?.id || '';
     const option = addChild(menu, 'button', `dialogue-character-option${characterId === newDialogueCharacterId ? ' selected' : ''}`); option.type = 'button'; option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(characterId === newDialogueCharacterId));
-    const optionAvatar = addChild(option, 'span', 'dialogue-character-option-avatar', character ? character.name.slice(0, 1) : '—'); optionAvatar.style.background = character?.color || '#eceeeb'; optionAvatar.style.color = character ? '#fff' : '#a1a5a1';
+    const optionAvatar = addChild(option, 'span', 'dialogue-character-option-avatar', character ? character.name.slice(0, 1) : '—'); optionAvatar.style.background = character?.color || '#ffe5da'; optionAvatar.style.color = character ? '#fff' : '#c96c56';
     const copy = addChild(option, 'span', 'dialogue-character-option-copy'); addChild(copy, 'b', '', character?.name || '不设置角色'); addChild(copy, 'small', '', character?.role || (character ? '未设置角色定位' : '对白中不显示头像和名称'));
     addChild(option, 'span', 'dialogue-character-option-check', characterId === newDialogueCharacterId ? '✓' : '');
     option.addEventListener('click', () => { newDialogueCharacterId = characterId; syncDialogueCreationState(); setDialogueCharacterMenuOpen(false); });
@@ -781,9 +813,60 @@ function openApplicationDialog(type) {
   close.addEventListener('click', dismiss);
   overlay.addEventListener('click', (event) => { if (event.target === overlay) dismiss(); });
 }
+function openEditorPreferencesDialog() {
+  document.querySelector('.application-dialog-overlay')?.remove();
+  const overlay = addChild(document.body, 'div', 'editor-dialog-overlay application-dialog-overlay');
+  const dialog = addChild(overlay, 'div', 'editor-dialog application-dialog editor-preferences-dialog');
+  const header = addChild(dialog, 'div', 'application-dialog-header');
+  const heading = addChild(header, 'div'); addChild(heading, 'h3', '', '编辑器偏好设置'); addChild(heading, 'p', 'preferences-dialog-subtitle', '设置新项目和所有剧本编辑区域使用的默认文字样式。');
+  const close = addChild(header, 'button', 'application-dialog-close', '×'); close.type = 'button'; close.title = '关闭';
+  const body = addChild(dialog, 'div', 'application-dialog-body preferences-dialog-body');
+  const preview = addChild(body, 'div', 'editor-preferences-preview');
+  addChild(preview, 'span', 'editor-preferences-preview-label', '实时预览');
+  const previewMeta = addChild(preview, 'div', 'editor-preferences-preview-meta'); addChild(previewMeta, 'span', 'editor-preferences-preview-avatar', '林'); addChild(previewMeta, 'b', '', '林澈');
+  const previewText = addChild(preview, 'p'); previewText.append(document.createTextNode('码头的灯正在逐盏熄灭，')); const ruby = addChild(previewText, 'ruby', '', '潮声'); addChild(ruby, 'rt', '', '环境提示'); previewText.append(document.createTextNode('比平时更近。'));
+  const controls = addChild(body, 'div', 'editor-preferences-controls');
+  const definitions = [
+    { key: 'fontSize', label: '默认字号', description: '对白和旁白正文的基础字号', min: 12, max: 30, step: 1, unit: 'px' },
+    { key: 'letterSpacing', label: '文字间距', description: '调整每个字符之间的距离', min: -1, max: 5, step: 0.1, unit: 'px' },
+    { key: 'paragraphSpacing', label: '段落间距', description: '正文段落之间及角色信息后的留白', min: 0, max: 36, step: 1, unit: 'px' },
+    { key: 'annotationSize', label: '上方注释字号', description: '显示在正文上方的小型注释文字', min: 6, max: 16, step: 1, unit: 'px' }
+  ];
+  const initial = currentEditorPreferences();
+  const inputs = {};
+  const updatePreview = () => {
+    const values = normalizeEditorPreferences(Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.number.value])));
+    previewText.style.fontSize = `${values.fontSize}px`;
+    previewText.style.letterSpacing = `${values.letterSpacing}px`;
+    previewText.style.marginTop = `${values.paragraphSpacing}px`;
+    previewText.querySelector('rt').style.fontSize = `${values.annotationSize}px`;
+  };
+  definitions.forEach((definition) => {
+    const row = addChild(controls, 'div', 'editor-preference-row');
+    const copy = addChild(row, 'div', 'editor-preference-copy'); addChild(copy, 'b', '', definition.label); addChild(copy, 'small', '', definition.description);
+    const inputArea = addChild(row, 'div', 'editor-preference-inputs');
+    const range = addChild(inputArea, 'input'); range.type = 'range'; range.min = String(definition.min); range.max = String(definition.max); range.step = String(definition.step); range.value = String(initial[definition.key]);
+    const numberWrap = addChild(inputArea, 'label', 'editor-preference-number'); const number = addChild(numberWrap, 'input'); number.type = 'number'; number.min = String(definition.min); number.max = String(definition.max); number.step = String(definition.step); number.value = String(initial[definition.key]); addChild(numberWrap, 'span', '', definition.unit);
+    inputs[definition.key] = { range, number };
+    range.addEventListener('input', () => { number.value = range.value; updatePreview(); });
+    number.addEventListener('input', () => { range.value = number.value; updatePreview(); });
+  });
+  const actions = addChild(body, 'div', 'editor-dialog-actions preferences-dialog-actions');
+  const reset = addChild(actions, 'button', 'file-button preferences-reset-button', '恢复默认'); reset.type = 'button';
+  const cancel = addChild(actions, 'button', 'file-button', '取消'); cancel.type = 'button';
+  const save = addChild(actions, 'button', 'file-button save', '保存偏好'); save.type = 'button';
+  const dismiss = () => overlay.remove();
+  reset.addEventListener('click', () => { Object.entries(inputs).forEach(([key, input]) => { input.range.value = String(DEFAULT_EDITOR_PREFERENCES[key]); input.number.value = String(DEFAULT_EDITOR_PREFERENCES[key]); }); updatePreview(); });
+  cancel.addEventListener('click', dismiss);
+  close.addEventListener('click', dismiss);
+  save.addEventListener('click', () => { applyEditorPreferences(Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.number.value]))); dismiss(); showToast('编辑器偏好已保存'); });
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) dismiss(); });
+  updatePreview();
+}
 document.getElementById('windowSettingsButton')?.addEventListener('click', (event) => { event.stopPropagation(); closeWindowProjectMenu(); const menu = document.getElementById('windowSettingsMenu'); setWindowSettingsMenuOpen(Boolean(menu?.hidden)); });
 document.querySelectorAll('[data-theme-option]').forEach((button) => button.addEventListener('click', () => { applyThemePreference(button.dataset.themeOption); closeWindowSettingsMenu(); }));
 document.querySelectorAll('[data-scale-option]').forEach((button) => button.addEventListener('click', () => { applyInterfaceScale(Number(button.dataset.scaleOption)); closeWindowSettingsMenu(); }));
+document.getElementById('editorPreferencesBtn')?.addEventListener('click', () => { closeWindowSettingsMenu(); openEditorPreferencesDialog(); });
 document.getElementById('windowHelpButton')?.addEventListener('click', () => { closeWindowProjectMenu(); closeWindowSettingsMenu(); openApplicationDialog('help'); });
 systemThemeQuery.addEventListener('change', () => { if (currentThemePreference() === 'system') applyThemePreference('system', false); });
 function projectSearchText(value) {
@@ -850,6 +933,7 @@ document.getElementById('previewBtn')?.addEventListener('click', () => { updateP
 document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); closeWindowSettingsMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); closeWindowProjectMenu(); setWindowSettingsMenuOpen(true); } });
 applyThemePreference(currentThemePreference(), false);
 applyInterfaceScale(Number(localStorage.getItem('rropeway-interface-scale') || 100), false);
+applyEditorPreferences(currentEditorPreferences(), false);
 desktopApi?.onBeforeClose(async () => { const saved = await saveProject(); if (saved) desktopApi.finishClose(); else desktopApi.cancelClose(); });
 setInterval(() => { if (desktopState.dirty && desktopState.data) localStorage.setItem('scriptroom-draft', JSON.stringify({ filePath: desktopState.filePath, data: captureProject(), savedAt: Date.now() })); }, 10000);
 if (desktopApi) initializeProject();
@@ -885,7 +969,27 @@ function applyInlineTextFormat(command, value = null) {
   if (!block || !paragraph) return;
   paragraph.focus(); restoreTextSelection(paragraph);
   document.execCommand(command, false, value);
-  block.text = paragraph.textContent;
+  block.text = richTextPlainText(paragraph);
+  block.textHtml = sanitizeRichTextHtml(paragraph.innerHTML);
+  rememberTextSelection();
+  markDirty();
+}
+async function applyRubyAnnotation() {
+  const block = activeDialogueBlock(); const paragraph = selectedDialogueParagraph();
+  if (!block || !paragraph) return;
+  paragraph.focus(); restoreTextSelection(paragraph);
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || selection.isCollapsed || !selection.toString().trim()) { showToast('请先选中需要添加上方注释的文字'); return; }
+  rememberTextSelection();
+  const annotation = await requestTextInput('文字上方注释', '');
+  if (!annotation) return;
+  paragraph.focus(); restoreTextSelection(paragraph);
+  const activeSelection = window.getSelection();
+  if (!activeSelection?.rangeCount || activeSelection.isCollapsed) return;
+  const range = activeSelection.getRangeAt(0);
+  const ruby = document.createElement('ruby'); ruby.appendChild(range.extractContents()); const annotationNode = document.createElement('rt'); annotationNode.textContent = annotation; ruby.appendChild(annotationNode); range.insertNode(ruby);
+  activeSelection.removeAllRanges(); const caret = document.createRange(); caret.setStartAfter(ruby); caret.collapse(true); activeSelection.addRange(caret);
+  block.text = richTextPlainText(paragraph);
   block.textHtml = sanitizeRichTextHtml(paragraph.innerHTML);
   rememberTextSelection();
   markDirty();
@@ -908,14 +1012,13 @@ function renderTextFormattingSettings(body, block) {
   addCommandButton('S', '删除线', 'strikeThrough').classList.add('strike');
   addCommandButton('x²', '上标', 'superscript');
   addCommandButton('x₂', '下标', 'subscript');
-  addCommandButton('↶', '撤销文字编辑', 'undo');
-  addCommandButton('↷', '重做文字编辑', 'redo');
+  const annotationButton = addChild(toolbar, 'button', 'text-format-button text-annotation-button', '上注'); annotationButton.type = 'button'; annotationButton.title = '在选中文字上方添加小型注释'; annotationButton.addEventListener('mousedown', (event) => event.preventDefault()); annotationButton.addEventListener('click', applyRubyAnnotation);
   const fontSelect = addChild(toolbar, 'select', 'text-format-select text-font-select');
   [['', '字体'], ['Microsoft YaHei', '微软雅黑'], ['SimSun', '宋体'], ['KaiTi', '楷体'], ['Arial', 'Arial']].forEach(([value, label]) => { const option = addChild(fontSelect, 'option', '', label); option.value = value; });
   fontSelect.addEventListener('change', () => { if (fontSelect.value) applyInlineTextFormat('fontName', fontSelect.value); fontSelect.value = ''; });
-  const sizeSelect = addChild(toolbar, 'select', 'text-format-select');
-  [['3', '正常'], ['4', '较大'], ['5', '大字'], ['6', '标题']].forEach(([value, label]) => { const option = addChild(sizeSelect, 'option', '', label); option.value = value; });
-  sizeSelect.addEventListener('change', () => { applyInlineTextFormat('fontSize', sizeSelect.value); sizeSelect.value = '3'; });
+  const sizeSelect = addChild(toolbar, 'select', 'text-format-select text-size-select');
+  [['', '字号'], ['2', '13 px'], ['3', '16 px'], ['4', '18 px'], ['5', '22 px'], ['6', '28 px']].forEach(([value, label]) => { const option = addChild(sizeSelect, 'option', '', label); option.value = value; });
+  sizeSelect.addEventListener('change', () => { if (sizeSelect.value) applyInlineTextFormat('fontSize', sizeSelect.value); sizeSelect.value = ''; });
   const colorLabel = addChild(toolbar, 'label', 'text-color-control'); addChild(colorLabel, 'span', '', 'A');
   const colorInput = addChild(colorLabel, 'input'); colorInput.type = 'color'; colorInput.value = '#2d302f'; colorInput.title = '文字颜色'; colorInput.addEventListener('input', () => applyInlineTextFormat('foreColor', colorInput.value));
   const highlightLabel = addChild(toolbar, 'label', 'text-color-control text-highlight-control'); addChild(highlightLabel, 'span', '', '▰');
@@ -1274,6 +1377,15 @@ async function deleteBlock(index) {
   markDirty();
   showToast('\u5df2\u5220\u9664');
 }
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Backspace' || event.ctrlKey || event.metaKey || event.altKey) return;
+  const focused = document.activeElement;
+  if (focused?.closest?.('input, textarea, select, button, [contenteditable="true"]')) return;
+  const block = currentScene()?.blocks?.[selectedBlockIndex];
+  if (block?.type !== 'dialogue') return;
+  event.preventDefault();
+  deleteBlock(selectedBlockIndex);
+});
 document.addEventListener('dragstart', (event) => { const handle = event.target.closest('.block-handle'); const block = handle?.closest('.script-block'); if (!block) return; draggedBlockIndex = Number(block.dataset.blockIndex); block.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', block.dataset.blockIndex); });
 document.addEventListener('dragover', (event) => { const block = event.target.closest('.script-block'); if (!block || draggedBlockIndex === null) return; event.preventDefault(); document.querySelectorAll('.script-block').forEach((item) => item.classList.remove('drag-over')); if (Number(block.dataset.blockIndex) !== draggedBlockIndex) block.classList.add('drag-over'); });
 document.addEventListener('drop', (event) => { const target = event.target.closest('.script-block'); if (!target || draggedBlockIndex === null) return; event.preventDefault(); const targetIndex = Number(target.dataset.blockIndex); syncCurrentScene(); const scene = currentScene(); if (targetIndex !== draggedBlockIndex) { const [moved] = scene.blocks.splice(draggedBlockIndex, 1); scene.blocks.splice(targetIndex, 0, moved); selectedBlockIndex = targetIndex; renderScene(); markDirty(); showToast('对白顺序已调整'); } draggedBlockIndex = null; });
