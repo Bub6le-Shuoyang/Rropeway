@@ -19,7 +19,6 @@ npm start
 - `Ctrl + N`：新建项目
 - `Ctrl + O`：打开 `.scriptroom` 项目
 - `Ctrl + S`：保存项目
-- `Ctrl + Shift + K`：为当前对白快速添加“关键节点”标签
 
 ## 构建 Windows 安装包
 
