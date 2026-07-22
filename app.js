@@ -761,7 +761,7 @@ async function renameProject() {
   markDirty();
   showToast(`项目已重命名为「${normalizedTitle}」`);
 }
-function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; document.body.classList.remove('project-home-active'); views.home?.classList.add('hidden'); desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); document.querySelector('[data-view="editor"]')?.click(); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
+function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; document.body.classList.remove('project-home-active'); views.home?.classList.add('hidden'); desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); updateProjectFolderAction(); document.querySelector('[data-view="editor"]')?.click(); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
 function scheduleAutoSave(delay = 700) {
   clearTimeout(autoSaveTimer);
   if (!desktopState.filePath || !desktopState.dirty || restoringProjectHistory) return;
@@ -779,7 +779,9 @@ async function saveProject(options = {}) {
     try {
       const result = await desktopApi.saveProject(payload);
       if (!result) { setSaveStatus('未保存'); return false; }
+      if (result.previousFilePath && result.previousFilePath !== result.filePath) forgetRecentProject(result.previousFilePath);
       desktopState.filePath = result.filePath;
+      updateProjectFolderAction();
       setProjectLocationStatus('本地项目');
       rememberProject(result.filePath, result.data.title);
       if (editRevision === revisionAtStart) {
@@ -832,6 +834,7 @@ function showProjectHome(resetForm = false) {
   document.title = 'Rropeway · 本地剧本编辑器';
   setProjectLocationStatus('本地');
   setSaveStatus('未打开项目');
+  updateProjectFolderAction();
   updateUndoAvailability();
   if (resetForm) document.getElementById('projectCreateForm')?.reset();
 }
@@ -939,8 +942,43 @@ function setWindowProjectMenuOpen(open) {
   button.setAttribute('aria-expanded', String(open));
 }
 function closeWindowProjectMenu() { setWindowProjectMenuOpen(false); }
+function ensureProjectFolderAction() {
+  if (document.getElementById('openProjectFolderBtn')) return;
+  const renameButton = document.getElementById('renameProjectBtn');
+  if (!renameButton) return;
+  const button = node('button'); button.id = 'openProjectFolderBtn'; button.type = 'button';
+  addChild(button, 'span', '', '在资源管理器中打开'); addChild(button, 'kbd', '', '↗');
+  renameButton.insertAdjacentElement('afterend', button);
+}
+function updateProjectFolderAction() {
+  const button = document.getElementById('openProjectFolderBtn');
+  if (button) button.disabled = !desktopState.filePath;
+}
+async function openCurrentProjectFolder() {
+  closeWindowProjectMenu();
+  if (!desktopState.filePath) { showToast('请先保存项目'); return; }
+  try {
+    clearTimeout(autoSaveTimer);
+    while (activeSavePromise) await activeSavePromise;
+    if (desktopState.dirty) {
+      if (!(await saveProject({ silent: true }))) return;
+    } else {
+      const result = await desktopApi.organizeProjectStorage({ filePath: desktopState.filePath, data: JSON.parse(JSON.stringify(captureProject())) });
+      if (result.previousFilePath && result.previousFilePath !== result.filePath) forgetRecentProject(result.previousFilePath);
+      desktopState.filePath = result.filePath;
+      desktopState.data = result.data;
+      rememberProject(result.filePath, result.data.title);
+      updateProjectFolderAction();
+      if (result.migrated) showToast(result.cleanupIncomplete ? '项目已整理，旧文件未能完全清理' : '旧项目已整理到独立文件夹');
+    }
+    await desktopApi.openProjectFolder(desktopState.filePath);
+  }
+  catch (error) { showToast(error.message || '项目文件夹打开失败'); }
+}
+ensureProjectFolderAction();
+updateProjectFolderAction();
 document.getElementById('projectMenuButton')?.addEventListener('click', (event) => { event.stopPropagation(); closeWindowSettingsMenu(); const menu = document.getElementById('windowProjectMenu'); setWindowProjectMenuOpen(Boolean(menu?.hidden)); });
-document.getElementById('newProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); newProject(); }); document.getElementById('openProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); openProject(); }); document.getElementById('saveProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); saveProject(); }); document.getElementById('undoProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); undoProjectChange(); }); document.getElementById('renameProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); renameProject(); }); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
+document.getElementById('newProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); newProject(); }); document.getElementById('openProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); openProject(); }); document.getElementById('saveProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); saveProject(); }); document.getElementById('undoProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); undoProjectChange(); }); document.getElementById('renameProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); renameProject(); }); document.getElementById('openProjectFolderBtn')?.addEventListener('click', openCurrentProjectFolder); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
 function applyInterfaceScale(scale, persist = true) {
   const safeScale = [90, 100, 110].includes(Number(scale)) ? Number(scale) : 100;
   document.body.style.zoom = String(safeScale / 100);
@@ -1563,7 +1601,7 @@ function updateEditorScrollTools() {
 }
 async function deleteProjectEntry(project) {
   if (!project?.filePath) return;
-  const confirmed = await requestConfirmation(`确定删除项目“${project.title}”吗？\n项目文件、备份和同目录 assets 素材文件夹将移入回收站，历史记录也会删除。`);
+  const confirmed = await requestConfirmation(`确定删除项目“${project.title}”吗？\n项目文件夹及其中的素材、备份将移入回收站，历史记录也会删除。`);
   if (!confirmed) return;
   try {
     await desktopApi.deleteProject(project.filePath);

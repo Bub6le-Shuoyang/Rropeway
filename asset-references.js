@@ -26,5 +26,23 @@
     return referenceCount;
   }
 
-  return { removeAssetReferences };
+  function collectAssetReferences(project) {
+    const references = new Set();
+    const add = (relativePath) => {
+      const normalized = String(relativePath || '').replaceAll('\\', '/');
+      if (normalized.startsWith('assets/')) references.add(normalized);
+    };
+    (project?.assets || []).forEach((asset) => add(asset?.relativePath || asset?.fileName));
+    (project?.chapters || []).forEach((chapter) => (chapter.scenes || []).forEach((scene) => {
+      add(scene?.background);
+      (scene?.blocks || []).forEach((block) => {
+        add(block?.portrait);
+        (block?.images || []).forEach((image) => add(image?.relativePath));
+      });
+    }));
+    (project?.characters || []).forEach((character) => (character?.portraits || []).forEach((portrait) => add(typeof portrait === 'string' ? portrait : portrait?.relativePath)));
+    return [...references];
+  }
+
+  return { collectAssetReferences, removeAssetReferences };
 }));
