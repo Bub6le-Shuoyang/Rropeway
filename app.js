@@ -26,6 +26,8 @@ let draggedSceneInfo = null;
 let ignoreTreeClickUntil = 0;
 const EDITOR_PREFERENCES_STORAGE_KEY = 'rropeway-editor-preferences';
 const DEFAULT_EDITOR_PREFERENCES = { fontSize: 16, letterSpacing: 0, paragraphSpacing: 10, annotationSize: 9, slideshowInterval: 5 };
+const LAYOUT_PREFERENCES_STORAGE_KEY = 'rropeway-layout-preferences';
+const DEFAULT_LAYOUT_PREFERENCES = { sidebarCollapsed: false, sidebarWidth: 246, inspectorCollapsed: false, inspectorWidth: 276, floatingSections: [], floatingPositions: {} };
 
 function normalizeEditorPreferences(value = {}) {
   const clamp = (input, minimum, maximum, fallback) => Math.min(maximum, Math.max(minimum, Number.isFinite(Number(input)) ? Number(input) : fallback));
@@ -50,6 +52,63 @@ function applyEditorPreferences(value, persist = true) {
   root.style.setProperty('--editor-annotation-size', `${preferences.annotationSize}px`);
   if (persist) localStorage.setItem(EDITOR_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
   return preferences;
+}
+function currentLayoutPreferences() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(LAYOUT_PREFERENCES_STORAGE_KEY) || '{}');
+    return {
+      sidebarCollapsed: Boolean(stored.sidebarCollapsed),
+      sidebarWidth: Math.min(380, Math.max(180, Number(stored.sidebarWidth) || DEFAULT_LAYOUT_PREFERENCES.sidebarWidth)),
+      inspectorCollapsed: Boolean(stored.inspectorCollapsed),
+      inspectorWidth: Math.min(460, Math.max(220, Number(stored.inspectorWidth) || DEFAULT_LAYOUT_PREFERENCES.inspectorWidth)),
+      floatingSections: Array.isArray(stored.floatingSections) ? stored.floatingSections.filter((key) => ['properties', 'text'].includes(key)) : [],
+      floatingPositions: stored.floatingPositions && typeof stored.floatingPositions === 'object' ? stored.floatingPositions : {}
+    };
+  } catch { return { ...DEFAULT_LAYOUT_PREFERENCES, floatingSections: [], floatingPositions: {} }; }
+}
+let layoutPreferences = currentLayoutPreferences();
+function saveLayoutPreferences() { localStorage.setItem(LAYOUT_PREFERENCES_STORAGE_KEY, JSON.stringify(layoutPreferences)); }
+function resetWindowLayout() {
+  layoutPreferences = { ...DEFAULT_LAYOUT_PREFERENCES, floatingSections: [], floatingPositions: {} };
+  applyLayoutPreferences(); renderInspector(); showToast('窗口布局已恢复默认');
+}
+function applyLayoutPreferences(persist = true) {
+  document.body.classList.toggle('sidebar-collapsed', layoutPreferences.sidebarCollapsed);
+  document.body.classList.toggle('inspector-collapsed', layoutPreferences.inspectorCollapsed);
+  document.documentElement.style.setProperty('--sidebar-panel-width', `${layoutPreferences.sidebarWidth}px`);
+  document.documentElement.style.setProperty('--inspector-panel-width', `${layoutPreferences.inspectorWidth}px`);
+  const sidebarButton = document.getElementById('sidebarCollapseButton');
+  if (sidebarButton) { sidebarButton.textContent = layoutPreferences.sidebarCollapsed ? '›' : '‹'; sidebarButton.title = layoutPreferences.sidebarCollapsed ? '展开左侧栏' : '收起左侧栏'; }
+  const inspectorButton = document.getElementById('inspectorCollapseButton');
+  if (inspectorButton) { inspectorButton.textContent = layoutPreferences.inspectorCollapsed ? '«' : '»'; inspectorButton.title = layoutPreferences.inspectorCollapsed ? '展开右侧栏' : '收起右侧栏'; }
+  if (persist) saveLayoutPreferences();
+}
+function initializeLayoutControls() {
+  const floatingLayer = document.getElementById('floatingInspectorLayer'); if (floatingLayer && floatingLayer.parentElement !== document.body) document.body.appendChild(floatingLayer);
+  document.getElementById('sidebarCollapseButton')?.addEventListener('click', () => { layoutPreferences.sidebarCollapsed = !layoutPreferences.sidebarCollapsed; applyLayoutPreferences(); });
+  document.getElementById('inspectorCollapseButton')?.addEventListener('click', () => { layoutPreferences.inspectorCollapsed = !layoutPreferences.inspectorCollapsed; applyLayoutPreferences(); });
+  const resizeHandle = document.getElementById('inspectorResizeHandle');
+  resizeHandle?.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault(); layoutPreferences.inspectorCollapsed = false; applyLayoutPreferences(false);
+    const startX = event.clientX; const startWidth = layoutPreferences.inspectorWidth;
+    resizeHandle.setPointerCapture(event.pointerId); document.body.classList.add('inspector-resizing');
+    const move = (moveEvent) => { layoutPreferences.inspectorWidth = Math.min(460, Math.max(220, startWidth + startX - moveEvent.clientX)); applyLayoutPreferences(false); };
+    const finish = () => { document.body.classList.remove('inspector-resizing'); resizeHandle.removeEventListener('pointermove', move); resizeHandle.removeEventListener('pointerup', finish); resizeHandle.removeEventListener('pointercancel', finish); saveLayoutPreferences(); };
+    resizeHandle.addEventListener('pointermove', move); resizeHandle.addEventListener('pointerup', finish); resizeHandle.addEventListener('pointercancel', finish);
+  });
+  const sidebarResizeHandle = document.getElementById('sidebarResizeHandle');
+  sidebarResizeHandle?.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault(); layoutPreferences.sidebarCollapsed = false; applyLayoutPreferences(false);
+    const startX = event.clientX; const startWidth = layoutPreferences.sidebarWidth;
+    sidebarResizeHandle.setPointerCapture(event.pointerId); document.body.classList.add('sidebar-resizing');
+    const move = (moveEvent) => { layoutPreferences.sidebarWidth = Math.min(380, Math.max(180, startWidth + moveEvent.clientX - startX)); applyLayoutPreferences(false); };
+    const finish = () => { document.body.classList.remove('sidebar-resizing'); sidebarResizeHandle.removeEventListener('pointermove', move); sidebarResizeHandle.removeEventListener('pointerup', finish); sidebarResizeHandle.removeEventListener('pointercancel', finish); saveLayoutPreferences(); };
+    sidebarResizeHandle.addEventListener('pointermove', move); sidebarResizeHandle.addEventListener('pointerup', finish); sidebarResizeHandle.addEventListener('pointercancel', finish);
+  });
+  window.addEventListener('resize', () => clampFloatingInspectorSections(true));
+  applyLayoutPreferences(false);
 }
 
 function showToast(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('show'), 2400); }
@@ -563,23 +622,72 @@ function renderChapters() {
 }
 
 function renderImportedAssets() {
-  const grid = document.querySelector('.asset-grid'); if (!grid) return; grid.querySelectorAll('[data-imported="true"]').forEach((item) => item.remove());
-  if (!(desktopState.data?.assets || []).length) {
+  const grid = document.querySelector('.asset-grid'); if (!grid) return; grid.replaceChildren();
+  const assets = desktopState.data?.assets || [];
+  if (!assets.length) {
     const empty = node('div', 'asset-library-empty'); empty.dataset.imported = 'true';
     addChild(empty, 'b', '', '素材库还是空的'); addChild(empty, 'span', '', '导入图片后会复制到当前项目的 assets/images 目录。');
     grid.appendChild(empty);
     return;
   }
-  (desktopState.data?.assets || []).forEach((asset) => {
+  const groups = new Map();
+  assets.forEach((asset) => { const tag = asset.tags?.[0] || '未归档'; if (!groups.has(tag)) groups.set(tag, []); groups.get(tag).push(asset); });
+  const orderedGroups = [...groups.entries()].sort(([left], [right]) => { if (left === '未归档') return -1; if (right === '未归档') return 1; return left.localeCompare(right, 'zh-CN'); });
+  orderedGroups.forEach(([tag, taggedAssets]) => {
+    const group = addChild(grid, 'section', 'asset-tag-group'); group.dataset.imported = 'true';
+    const heading = addChild(group, 'div', 'asset-tag-group-heading'); addChild(heading, 'h3', '', tag); addChild(heading, 'span', '', `${taggedAssets.length} 项素材`);
+    const groupGrid = addChild(group, 'div', 'asset-tag-group-grid');
+    taggedAssets.forEach((asset) => renderAssetCard(asset, groupGrid));
+  });
+}
+function renderAssetCard(asset, grid) {
     const card = node('div', 'asset-card imported-asset'); card.dataset.imported = 'true'; card.dataset.assetId = asset.id;
-    const kind = ['mp3', 'wav', 'ogg'].includes(asset.type) ? '音效' : '图片'; addChild(card, 'span', '', kind); addChild(card, 'b', '', asset.name);
+    const kind = ['mp3', 'wav', 'ogg'].includes(asset.type) ? '音效' : '图片';
+    const header = addChild(card, 'div', 'asset-card-header'); addChild(header, 'span', 'asset-kind', kind);
+    const tagButton = addChild(header, 'button', `asset-tag-button${asset.tags?.length ? ' assigned' : ''}`, asset.tags?.[0] ? `# ${asset.tags[0]}` : '# 归档'); tagButton.type = 'button'; tagButton.title = asset.tags?.[0] ? `归档于 ${asset.tags[0]}，点击修改` : '将素材归档到 Tag'; tagButton.addEventListener('click', () => editAssetTag(asset));
+    const nameRow = addChild(card, 'div', 'asset-name-row');
+    const name = addChild(nameRow, 'b', 'asset-name', asset.name); name.title = asset.name;
+    const rename = addChild(nameRow, 'button', 'asset-rename-button', '✎'); rename.type = 'button'; rename.title = '重命名素材'; rename.setAttribute('aria-label', `重命名素材 ${asset.name}`); rename.addEventListener('click', () => renameAsset(asset));
     const actions = addChild(card, 'div', 'asset-actions');
     if (kind === '图片') { const background = addChild(actions, 'button', 'asset-action', '设为背景'); background.addEventListener('click', () => bindAsset(asset, 'background')); const portrait = addChild(actions, 'button', 'asset-action', '设为立绘'); portrait.addEventListener('click', () => bindAsset(asset, 'portrait')); }
     const show = addChild(actions, 'button', 'asset-action', '打开位置'); show.addEventListener('click', () => desktopApi?.showItem(desktopState.filePath, asset.relativePath));
     const remove = addChild(actions, 'button', 'asset-action danger', '删除'); remove.addEventListener('click', () => deleteAsset(asset));
     if (desktopState.filePath && kind === '图片') desktopApi.readAsset(desktopState.filePath, asset.relativePath).then((src) => { if (src) card.style.backgroundImage = `linear-gradient(180deg, transparent 25%, rgba(30,35,33,.7)), url("${src}")`; }).catch(() => {});
     grid.appendChild(card);
+}
+function requestAssetTag(asset) {
+  return new Promise((resolve) => {
+    const overlay = node('div', 'editor-dialog-overlay'); const dialog = addChild(overlay, 'div', 'editor-dialog');
+    addChild(dialog, 'h3', '', '素材归档 Tag'); addChild(dialog, 'p', 'editor-dialog-message', '每个素材可归档到一个 Tag；留空或点击“取消归档”会放回未归档分类。');
+    const input = addChild(dialog, 'input', 'editor-dialog-input'); input.value = asset.tags?.[0] || ''; input.placeholder = '例如：背景、角色立绘、战斗音效';
+    const actions = addChild(dialog, 'div', 'editor-dialog-actions');
+    const unarchive = addChild(actions, 'button', 'file-button', '取消归档'); unarchive.type = 'button'; unarchive.disabled = !asset.tags?.length;
+    const cancel = addChild(actions, 'button', 'file-button', '取消'); cancel.type = 'button';
+    const save = addChild(actions, 'button', 'file-button save', '保存'); save.type = 'button';
+    const close = (value) => { overlay.remove(); resolve(value); };
+    unarchive.addEventListener('click', () => close(''));
+    cancel.addEventListener('click', () => close(null)); save.addEventListener('click', () => close(input.value.trim()));
+    input.addEventListener('keydown', (event) => { if (event.key === 'Enter') close(input.value.trim()); if (event.key === 'Escape') close(null); });
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
+    document.body.appendChild(overlay); requestAnimationFrame(() => { input.focus(); input.select(); });
   });
+}
+async function editAssetTag(asset) {
+  const tag = await requestAssetTag(asset); if (tag === null) return;
+  asset.tags = tag ? [tag] : [];
+  renderImportedAssets(); markDirty(); showToast(tag ? `素材已归档到“${tag}”` : '素材已移回未归档');
+}
+async function renameAsset(asset) {
+  const nextName = await requestTextInput('重命名素材', asset.name || '未命名素材');
+  if (!nextName || nextName === asset.name) return;
+  const previousName = asset.name;
+  asset.name = nextName;
+  (desktopState.data?.chapters || []).forEach((chapter) => chapter.scenes.forEach((scene) => scene.blocks.forEach((block) => {
+    if (block.type !== 'segment' || !Array.isArray(block.images)) return;
+    block.images.forEach((image) => { if ((image.assetId && image.assetId === asset.id) || image.relativePath === asset.relativePath) image.name = nextName; });
+  })));
+  renderImportedAssets(); renderScene(); renderInspector(); markDirty();
+  showToast(`已将“${previousName}”重命名为“${nextName}”`);
 }
 function bindAsset(asset, mode) { syncCurrentScene(); const scene = currentScene(); if (mode === 'background') { scene.background = asset.relativePath; showToast(`已将「${asset.name}」设为场景背景`); } else { const block = scene.blocks[selectedBlockIndex]; if (!block || block.type !== 'dialogue') { showToast('请先选择一条对白'); return; } block.portrait = asset.relativePath; document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"]`)?.setAttribute('data-portrait', asset.relativePath); showToast(`已将「${asset.name}」绑定到当前对白`); } markDirty(); }
 
@@ -768,7 +876,18 @@ function updatePreview() {
   }
 }
 
-navItems.forEach((item) => item.addEventListener('click', () => { if (!desktopState.data) { showToast('请先创建或打开项目'); return; } const target = item.dataset.view; navItems.forEach((nav) => nav.classList.toggle('active', nav === item)); document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor'); views.characters.classList.toggle('hidden', target !== 'characters'); views.assets.classList.toggle('hidden', target !== 'assets'); document.querySelector('.breadcrumb span').textContent = target === 'characters' ? '角色与立绘' : target === 'assets' ? '素材库' : '剧本编辑器'; if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets(); }));
+navItems.forEach((item) => item.addEventListener('click', () => {
+  if (!desktopState.data) { showToast('请先创建或打开项目'); return; }
+  const target = item.dataset.view;
+  navItems.forEach((nav) => nav.classList.toggle('active', nav === item));
+  document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor');
+  views.characters.classList.toggle('hidden', target !== 'characters'); views.assets.classList.toggle('hidden', target !== 'assets');
+  document.getElementById('floatingInspectorLayer')?.classList.toggle('hidden', target !== 'editor');
+  const breadcrumb = document.querySelector('.breadcrumb'); const separator = breadcrumb?.querySelector('span:nth-child(2)'); const detail = breadcrumb?.querySelector('strong');
+  breadcrumb?.querySelector('span:first-child')?.replaceChildren(document.createTextNode(target === 'characters' ? '角色与立绘' : target === 'assets' ? '项目素材库' : '剧本编辑器'));
+  if (separator) separator.hidden = target !== 'editor'; if (detail) detail.hidden = target !== 'editor';
+  if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets();
+}));
 document.addEventListener('click', (event) => {
   const block = event.target.closest('.script-block');
   if (block) {
@@ -930,6 +1049,7 @@ document.getElementById('windowSettingsButton')?.addEventListener('click', (even
 document.querySelectorAll('[data-theme-option]').forEach((button) => button.addEventListener('click', () => { applyThemePreference(button.dataset.themeOption); closeWindowSettingsMenu(); }));
 document.querySelectorAll('[data-scale-option]').forEach((button) => button.addEventListener('click', () => { applyInterfaceScale(Number(button.dataset.scaleOption)); closeWindowSettingsMenu(); }));
 document.getElementById('editorPreferencesBtn')?.addEventListener('click', () => { closeWindowSettingsMenu(); openEditorPreferencesDialog(); });
+document.getElementById('resetWindowLayoutBtn')?.addEventListener('click', () => { closeWindowSettingsMenu(); resetWindowLayout(); });
 document.getElementById('windowHelpButton')?.addEventListener('click', () => { closeWindowProjectMenu(); closeWindowSettingsMenu(); openApplicationDialog('help'); });
 systemThemeQuery.addEventListener('change', () => { if (currentThemePreference() === 'system') applyThemePreference('system', false); });
 function projectSearchText(value) {
@@ -997,6 +1117,7 @@ document.addEventListener('keydown', (event) => { const withCommand = event.ctrl
 applyThemePreference(currentThemePreference(), false);
 applyInterfaceScale(Number(localStorage.getItem('rropeway-interface-scale') || 100), false);
 applyEditorPreferences(currentEditorPreferences(), false);
+initializeLayoutControls();
 desktopApi?.onBeforeClose(async () => { const saved = await saveProject(); if (saved) desktopApi.finishClose(); else desktopApi.cancelClose(); });
 setInterval(() => { if (desktopState.dirty && desktopState.data) localStorage.setItem('scriptroom-draft', JSON.stringify({ filePath: desktopState.filePath, data: captureProject(), savedAt: Date.now() })); }, 10000);
 if (desktopApi) initializeProject();
@@ -1004,10 +1125,70 @@ if (desktopApi) initializeProject();
 // Interactive editor layer: characters, inspector controls, drag sorting and project switcher.
 let draggedBlockIndex = null;
 function activeDialogueBlock() { const scene = currentScene(); const block = scene?.blocks?.[selectedBlockIndex]; return block?.type === 'dialogue' ? block : null; }
-function createInspectorSection(body, title, description = '') {
-  const section = addChild(body, 'section', 'inspector-section');
-  addChild(section, 'h3', '', title);
+function setInspectorSectionFloating(sectionKey, floating) {
+  const keys = new Set(layoutPreferences.floatingSections);
+  if (floating) keys.add(sectionKey); else keys.delete(sectionKey);
+  layoutPreferences.floatingSections = [...keys];
+  if (keys.has('properties') && keys.has('text')) layoutPreferences.inspectorCollapsed = true;
+  if (!floating) layoutPreferences.inspectorCollapsed = false;
+  applyLayoutPreferences();
+  renderInspector();
+}
+function makeFloatingInspectorSectionDraggable(section, sectionKey, handle) {
+  handle.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.target.closest('button')) return;
+    event.preventDefault();
+    const rect = section.getBoundingClientRect();
+    const layerRect = section.offsetParent?.getBoundingClientRect() || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    const offsetX = event.clientX - rect.left;
+    const offsetY = event.clientY - rect.top;
+    handle.setPointerCapture(event.pointerId);
+    section.classList.add('dragging');
+    const move = (moveEvent) => {
+      const left = Math.min(Math.max(0, layerRect.width - section.offsetWidth), Math.max(0, moveEvent.clientX - offsetX - layerRect.left));
+      const top = Math.min(Math.max(0, layerRect.height - section.offsetHeight), Math.max(0, moveEvent.clientY - offsetY - layerRect.top));
+      section.style.left = `${left}px`; section.style.top = `${top}px`;
+      layoutPreferences.floatingPositions[sectionKey] = { left, top };
+    };
+    const finish = () => { section.classList.remove('dragging'); handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', finish); handle.removeEventListener('pointercancel', finish); saveLayoutPreferences(); };
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', finish); handle.addEventListener('pointercancel', finish);
+  });
+}
+function setInspectorFloatButtonIcon(button, floating) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 22 22'); svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', floating ? 'M4.5 5.5h13v11h-13z M13.5 5.5v11' : 'M5 8v9h9 M10 5h7v7 M17 5l-8 8');
+  svg.appendChild(path); button.replaceChildren(svg);
+}
+function clampFloatingInspectorSections(persist = false) {
+  const layer = document.getElementById('floatingInspectorLayer'); if (!layer) return;
+  layer.querySelectorAll('.floating-inspector-section').forEach((section) => {
+    const sectionKey = section.dataset.inspectorSectionKey; if (!sectionKey) return;
+    const left = Math.min(Math.max(0, layer.clientWidth - section.offsetWidth), Math.max(0, Number.parseFloat(section.style.left) || 0));
+    const top = Math.min(Math.max(0, layer.clientHeight - section.offsetHeight), Math.max(0, Number.parseFloat(section.style.top) || 0));
+    section.style.left = `${left}px`; section.style.top = `${top}px`; layoutPreferences.floatingPositions[sectionKey] = { left, top };
+  });
+  if (persist) saveLayoutPreferences();
+}
+function createInspectorSection(body, title, description = '', sectionKey = '') {
+  const floating = sectionKey && layoutPreferences.floatingSections.includes(sectionKey);
+  const target = floating ? document.getElementById('floatingInspectorLayer') : body;
+  const section = addChild(target, 'section', `inspector-section${floating ? ' floating-inspector-section' : ''}`);
+  if (sectionKey) section.dataset.inspectorSectionKey = sectionKey;
+  const heading = addChild(section, 'div', 'inspector-section-heading');
+  addChild(heading, 'h3', '', title);
+  if (sectionKey) {
+    const floatButton = addChild(heading, 'button', 'inspector-section-float-button'); floatButton.type = 'button'; floatButton.title = floating ? '停靠到右侧栏' : '移到悬浮窗'; floatButton.setAttribute('aria-label', floatButton.title); setInspectorFloatButtonIcon(floatButton, floating);
+    floatButton.addEventListener('click', () => setInspectorSectionFloating(sectionKey, !floating));
+  }
   if (description) addChild(section, 'p', 'inspector-section-description', description);
+  if (floating) {
+    const defaultPosition = sectionKey === 'text' ? { left: Math.max(20, window.innerWidth - 410), top: 430 } : { left: Math.max(20, window.innerWidth - 410), top: 78 };
+    const position = layoutPreferences.floatingPositions[sectionKey] || defaultPosition;
+    const layer = document.getElementById('floatingInspectorLayer'); const layerWidth = layer?.clientWidth || window.innerWidth; const layerHeight = layer?.clientHeight || window.innerHeight;
+    section.style.left = `${Math.min(Math.max(0, layerWidth - section.offsetWidth), Math.max(0, Number(position.left) || 0))}px`; section.style.top = `${Math.min(Math.max(0, layerHeight - section.offsetHeight), Math.max(0, Number(position.top) || 0))}px`;
+    makeFloatingInspectorSectionDraggable(section, sectionKey, heading);
+  }
   return section;
 }
 function selectedDialogueParagraph() { return document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .block-content p[contenteditable="true"]`); }
@@ -1065,7 +1246,7 @@ function applyParagraphAlignment(alignment) {
   markDirty();
 }
 function renderTextFormattingSettings(body, block) {
-  const section = createInspectorSection(body, '文字编辑器', '选中对白文字后设置格式；未选中文字时会应用到整条对白。');
+  const section = createInspectorSection(body, '文字编辑器', '选中对白文字后设置格式；未选中文字时会应用到整条对白。', 'text');
   if (!block) { section.classList.add('disabled'); addChild(section, 'div', 'inspector-empty compact', '请选择一条对白后使用文字格式。'); return; }
   const toolbar = addChild(section, 'div', 'text-format-toolbar');
   const addCommandButton = (label, title, command) => { const button = addChild(toolbar, 'button', 'text-format-button', label); button.type = 'button'; button.title = title; button.addEventListener('mousedown', (event) => event.preventDefault()); button.addEventListener('click', () => applyInlineTextFormat(command)); return button; };
@@ -1149,12 +1330,13 @@ function renderSegmentImageSettings(section, segment) {
 }
 function renderInspector() {
   const body = document.querySelector('.inspector-body'); if (!body) return; body.replaceChildren();
+  document.getElementById('floatingInspectorLayer')?.replaceChildren();
   const header = document.querySelector('.inspector-header span');
   const selectedBlock = currentScene()?.blocks?.[selectedBlockIndex];
   let dialogueBlock = null;
   if (selectedBlock?.type === 'segment') {
     if (header) header.textContent = '分段属性';
-    const properties = createInspectorSection(body, '当前分段');
+    const properties = createInspectorSection(body, '当前分段', '', 'properties');
     const titleGroup = addChild(properties, 'div', 'property-group'); addChild(titleGroup, 'label', '', '分段名称');
     const titleInput = addChild(titleGroup, 'input', 'select-control editor-input'); titleInput.value = selectedBlock.title || ''; titleInput.placeholder = '输入分段名称';
     titleInput.addEventListener('input', () => { selectedBlock.title = titleInput.value; document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .segment-title`)?.replaceChildren(document.createTextNode(titleInput.value || '未命名分段')); renderSegmentNavigator(); markDirty(); });
@@ -1166,12 +1348,12 @@ function renderInspector() {
     renderSegmentImageSettings(properties, selectedBlock);
   } else if (selectedBlock?.type === 'narration') {
     if (header) header.textContent = '旁白';
-    const properties = createInspectorSection(body, '当前旁白');
+    const properties = createInspectorSection(body, '当前旁白', '', 'properties');
     addChild(properties, 'div', 'inspector-empty compact', '旁白无需设置角色、状态标签或立绘，直接在左侧编辑内容。');
   } else {
     if (header) header.textContent = '对白属性';
     dialogueBlock = activeDialogueBlock();
-    const properties = createInspectorSection(body, '当前对白');
+    const properties = createInspectorSection(body, '当前对白', '', 'properties');
     if (!dialogueBlock) addChild(properties, 'div', 'inspector-empty compact', '选择一条对白后，可编辑角色、状态标签和立绘属性。');
     else {
       const characters = desktopState.data.characters || [];
@@ -1197,6 +1379,7 @@ function renderInspector() {
     }
   }
   if (selectedBlock?.type !== 'narration') renderTextFormattingSettings(body, dialogueBlock);
+  requestAnimationFrame(() => clampFloatingInspectorSections());
 }
 function applyCharacterToBlock(character, block) {
   block.character = character.name;

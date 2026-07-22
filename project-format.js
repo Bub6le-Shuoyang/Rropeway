@@ -55,7 +55,7 @@ function normalizeProject(input) {
     format: 'scriptroom-project', version: 1, title: String(value.title || 'Rropeway'), description: String(value.description || ''),
     chapters: chapters.map((chapter, chapterIndex) => ({ id: String(chapter?.id || `chapter-${Date.now()}-${chapterIndex}`), title: String(chapter?.title || `第 ${chapterIndex + 1} 章`), status: String(chapter?.status || '草稿'), scenes: Array.isArray(chapter?.scenes) ? chapter.scenes.map(normalizeScene) : [] })),
     characters: Array.isArray(value.characters) ? value.characters.map(normalizeCharacter) : [],
-    assets: Array.isArray(value.assets) ? value.assets.map((asset) => ({ id: String(asset?.id || `asset-${Date.now()}`), name: String(asset?.name || '未命名素材'), fileName: String(asset?.fileName || ''), relativePath: String(asset?.relativePath || asset?.fileName || ''), type: String(asset?.type || '') })) : [],
+    assets: Array.isArray(value.assets) ? value.assets.map((asset) => ({ id: String(asset?.id || `asset-${Date.now()}`), name: String(asset?.name || '未命名素材'), fileName: String(asset?.fileName || ''), relativePath: String(asset?.relativePath || asset?.fileName || ''), type: String(asset?.type || ''), tags: (Array.isArray(asset?.tags) ? asset.tags : asset?.tag ? [asset.tag] : []).map((tag) => String(tag).trim()).filter((tag, index, tags) => tag && tags.indexOf(tag) === index) })) : [],
     updatedAt: value.updatedAt || new Date().toISOString()
   };
   if (!normalized.chapters.length) normalized.chapters.push({ id: `chapter-${Date.now()}`, title: '第一章', status: '草稿', scenes: [] });

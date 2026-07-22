@@ -29,10 +29,12 @@ test('自定义项目名称会在项目数据中保留', () => {
   assert.equal(project.description, '一部本地悬疑剧本');
 });
 
-test('素材只保留项目内相对路径字段', () => {
-  const project = normalizeProject({ assets: [{ name: '立绘.png', fileName: 'assets/a.png' }] });
+test('素材会保留项目内路径、二次命名和归档标签', () => {
+  const project = normalizeProject({ assets: [{ name: '码头夜景（重命名）', fileName: 'assets/a.png', tags: ['背景', ' 背景 ', '夜景'] }] });
+  assert.equal(project.assets[0].name, '码头夜景（重命名）');
   assert.equal(project.assets[0].relativePath, 'assets/a.png');
   assert.equal(project.assets[0].fileName, 'assets/a.png');
+  assert.deepEqual(project.assets[0].tags, ['背景', '夜景']);
 });
 test('角色代表色和默认立绘会被规范化保存', () => {
   const project = normalizeProject({ characters: [{ name: '角色A', color: '#12abef', portraitPreset: 'short-female', description: '测试角色' }] });
