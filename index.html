@@ -52,10 +52,14 @@
               <div class="canvas-toolbar"><span>对白流</span><div class="toolbar-spacer"></div><button class="toolbar-icon" title="撤销">↶</button><button class="toolbar-icon" title="重做">↷</button></div>
               <div class="timeline-line"></div>
               <div class="flow-add-actions" id="flowAddActions" aria-label="新增剧本内容">
-                <label class="dialogue-character-picker" title="设置新增对白角色">
-                  <span class="dialogue-character-picker-avatar" id="dialogueCharacterPickerAvatar" aria-hidden="true">—</span>
-                  <select id="dialogueCharacterPicker" aria-label="设置新增对白角色"><option value="">不设置角色</option></select>
-                </label>
+                <div class="dialogue-character-picker" id="dialogueCharacterPicker">
+                  <button class="dialogue-character-picker-button" id="dialogueCharacterPickerButton" type="button" aria-haspopup="listbox" aria-expanded="false" title="设置新增对白角色">
+                    <span class="dialogue-character-picker-avatar" id="dialogueCharacterPickerAvatar" aria-hidden="true">—</span>
+                    <span class="dialogue-character-picker-label" id="dialogueCharacterPickerLabel">不设置角色</span>
+                    <svg class="dialogue-character-picker-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6 3.5 3.5L11.5 6"/></svg>
+                  </button>
+                  <div class="dialogue-character-menu hidden" id="dialogueCharacterMenu" role="listbox" hidden></div>
+                </div>
                 <button class="flow-add-action" id="addDialogue" type="button" title="添加对话" aria-label="添加对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5h14v9H9l-4 3v-12Z"/><path d="M8.5 10h7M8.5 13h4.5"/></svg><small>对话</small></button>
                 <button class="flow-add-action" id="addNarration" type="button" title="添加旁白" aria-label="添加旁白"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10M7 11h10M7 15h6"/><path d="M5 4.5h14v15H5z"/></svg><small>旁白</small></button>
                 <button class="flow-add-action" id="addSegment" type="button" title="添加分段" aria-label="添加分段"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16"/><circle cx="12" cy="12" r="2.5"/></svg><small>分段</small></button>

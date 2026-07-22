@@ -504,21 +504,42 @@ function renderImportedAssets() {
 }
 function bindAsset(asset, mode) { syncCurrentScene(); const scene = currentScene(); if (mode === 'background') { scene.background = asset.relativePath; showToast(`已将「${asset.name}」设为场景背景`); } else { const block = scene.blocks[selectedBlockIndex]; if (!block || block.type !== 'dialogue') { showToast('请先选择一条对白'); return; } block.portrait = asset.relativePath; document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"]`)?.setAttribute('data-portrait', asset.relativePath); showToast(`已将「${asset.name}」绑定到当前对白`); } markDirty(); }
 
+function setDialogueCharacterMenuOpen(open) {
+  const picker = document.getElementById('dialogueCharacterPicker');
+  const button = document.getElementById('dialogueCharacterPickerButton');
+  const menu = document.getElementById('dialogueCharacterMenu');
+  if (!picker || !button || !menu) return;
+  picker.classList.toggle('open', open);
+  menu.hidden = !open;
+  menu.classList.toggle('hidden', !open);
+  button.setAttribute('aria-expanded', String(open));
+}
 function syncDialogueCreationState() {
   const addButton = document.getElementById('addDialogue');
-  const select = document.getElementById('dialogueCharacterPicker');
   const avatar = document.getElementById('dialogueCharacterPickerAvatar');
-  if (!addButton || !select || !avatar) return;
+  const label = document.getElementById('dialogueCharacterPickerLabel');
+  const menu = document.getElementById('dialogueCharacterMenu');
+  if (!addButton || !avatar || !label || !menu) return;
   const characters = desktopState.data?.characters || [];
   if (!characters.some((character) => character.id === newDialogueCharacterId)) newDialogueCharacterId = '';
-  select.replaceChildren();
-  const none = addChild(select, 'option', '', '不设置角色'); none.value = '';
-  characters.forEach((character) => { const option = addChild(select, 'option', '', character.name); option.value = character.id; option.selected = character.id === newDialogueCharacterId; });
-  select.value = newDialogueCharacterId;
   const selectedCharacter = characters.find((character) => character.id === newDialogueCharacterId);
   avatar.textContent = selectedCharacter ? selectedCharacter.name.slice(0, 1) : '—';
   avatar.style.background = selectedCharacter?.color || '#e6e8e5';
   avatar.style.color = selectedCharacter ? '#fff' : '#9da29d';
+  label.textContent = selectedCharacter?.name || '不设置角色';
+  menu.replaceChildren();
+  addChild(menu, 'div', 'dialogue-character-menu-title', '新增对白角色');
+  const addOption = (character) => {
+    const characterId = character?.id || '';
+    const option = addChild(menu, 'button', `dialogue-character-option${characterId === newDialogueCharacterId ? ' selected' : ''}`); option.type = 'button'; option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(characterId === newDialogueCharacterId));
+    const optionAvatar = addChild(option, 'span', 'dialogue-character-option-avatar', character ? character.name.slice(0, 1) : '—'); optionAvatar.style.background = character?.color || '#eceeeb'; optionAvatar.style.color = character ? '#fff' : '#a1a5a1';
+    const copy = addChild(option, 'span', 'dialogue-character-option-copy'); addChild(copy, 'b', '', character?.name || '不设置角色'); addChild(copy, 'small', '', character?.role || (character ? '未设置角色定位' : '对白中不显示头像和名称'));
+    addChild(option, 'span', 'dialogue-character-option-check', characterId === newDialogueCharacterId ? '✓' : '');
+    option.addEventListener('click', () => { newDialogueCharacterId = characterId; syncDialogueCreationState(); setDialogueCharacterMenuOpen(false); });
+  };
+  addOption(null);
+  characters.forEach(addOption);
+  if (!characters.length) addChild(menu, 'div', 'dialogue-character-menu-empty', '可前往“角色与立绘”创建角色');
   addButton.disabled = false;
 }
 function updateProjectTitle(title) {
@@ -690,7 +711,9 @@ document.addEventListener('click', (event) => {
     showToast('已添加分段');
   }
 });
-document.getElementById('dialogueCharacterPicker')?.addEventListener('change', (event) => { newDialogueCharacterId = event.target.value; syncDialogueCreationState(); });
+document.getElementById('dialogueCharacterPickerButton')?.addEventListener('click', (event) => { event.stopPropagation(); const menu = document.getElementById('dialogueCharacterMenu'); setDialogueCharacterMenuOpen(Boolean(menu?.hidden)); });
+document.addEventListener('click', (event) => { if (!event.target.closest('#dialogueCharacterPicker')) setDialogueCharacterMenuOpen(false); });
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setDialogueCharacterMenuOpen(false); });
 document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { if (event.target.closest('.segment-title')) renderSegmentNavigator(); markDirty(); } });
 document.querySelector('[title="撤销"]')?.addEventListener('click', undoProjectChange);
 document.querySelector('[title="重做"]')?.addEventListener('click', redoProjectChange);
