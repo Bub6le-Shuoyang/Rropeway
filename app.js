@@ -1,7 +1,7 @@
 const desktopApi = window.scriptroom;
 desktopApi?.getVersion?.().then((version) => { const label = document.getElementById('appVersion'); if (label) label.textContent = `v${version}`; }).catch(() => {});
 const navItems = document.querySelectorAll('.nav-item');
-const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), assets: document.getElementById('assetsView') };
+const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), assets: document.getElementById('assetsView'), home: document.getElementById('projectHomeView') };
 const toast = document.getElementById('toast');
 let desktopState = { filePath: null, data: null, dirty: false };
 const LAST_PROJECT_STORAGE_KEY = 'scriptroom-last-project';
@@ -132,11 +132,15 @@ function requestCharacterForm(existing = null) {
 }
 function captureBlocks() {
   return [...document.querySelectorAll('.script-canvas .script-block')].map((block) => {
-    if (block.classList.contains('segment-block')) return { type: 'segment', title: block.querySelector('.segment-title')?.textContent.trim() || '未命名分段', perspectiveCharacterId: block.dataset.perspectiveCharacterId || null };
+    if (block.classList.contains('segment-block')) {
+      let images = [];
+      try { images = JSON.parse(block.dataset.segmentImages || '[]'); } catch {}
+      return { type: 'segment', title: block.querySelector('.segment-title')?.textContent.trim() || '未命名分段', perspectiveCharacterId: block.dataset.perspectiveCharacterId || null, images };
+    }
     if (block.classList.contains('narration')) return { type: 'narration', text: block.querySelector('.block-content p')?.textContent.trim() || '' };
     if (block.classList.contains('choice-block')) return { type: 'choice', title: block.querySelector('.choice-title')?.textContent.trim() || '', options: [...block.querySelectorAll('.choices button')].map((item) => item.querySelector('.choice-text')?.textContent.trim() || '') };
     const paragraph = block.querySelector('.block-content p');
-    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '未命名角色', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#f2674f', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: paragraph?.textContent.trim() || '', textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
+    return { type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: paragraph?.textContent.trim() || '', textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^注：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
   });
 }
 
@@ -178,7 +182,7 @@ function sanitizeRichTextHtml(html) {
   const source = document.createElement('template');
   const output = document.createElement('div');
   source.innerHTML = String(html || '');
-  const allowedTags = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'SPAN', 'FONT', 'BR']);
+  const allowedTags = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'SPAN', 'FONT', 'SUP', 'SUB', 'BR']);
   const copySafeNode = (sourceNode, targetParent) => {
     if (sourceNode.nodeType === Node.TEXT_NODE) { targetParent.appendChild(document.createTextNode(sourceNode.textContent)); return; }
     if (sourceNode.nodeType !== Node.ELEMENT_NODE || ['SCRIPT', 'STYLE'].includes(sourceNode.tagName)) return;
@@ -186,9 +190,10 @@ function sanitizeRichTextHtml(html) {
     if (sourceNode.tagName === 'BR') { targetParent.appendChild(document.createElement('br')); return; }
     const tagName = sourceNode.tagName === 'FONT' ? 'span' : sourceNode.tagName.toLowerCase();
     const safeNode = document.createElement(tagName);
-    ['color', 'fontWeight', 'fontStyle', 'textDecoration', 'fontSize'].forEach((property) => { if (sourceNode.style?.[property]) safeNode.style[property] = sourceNode.style[property]; });
+    ['color', 'backgroundColor', 'fontWeight', 'fontStyle', 'textDecoration', 'fontSize', 'fontFamily'].forEach((property) => { if (sourceNode.style?.[property]) safeNode.style[property] = sourceNode.style[property]; });
     if (sourceNode.tagName === 'FONT') {
       if (sourceNode.color) safeNode.style.color = sourceNode.color;
+      if (sourceNode.face) safeNode.style.fontFamily = sourceNode.face;
       const sizeMap = { '1': '11px', '2': '13px', '3': '16px', '4': '18px', '5': '22px', '6': '28px', '7': '36px' };
       if (sizeMap[sourceNode.size]) safeNode.style.fontSize = sizeMap[sourceNode.size];
     }
@@ -266,31 +271,48 @@ function createBlockElement(block, index) {
   addChild(wrapper, 'div', 'block-handle', '⠿');
   const content = node('div', 'block-content');
   if (block.type === 'segment') {
+    const images = Array.isArray(block.images) ? block.images : [];
+    wrapper.dataset.segmentImages = JSON.stringify(images);
+    wrapper.classList.toggle('has-images', images.length > 0);
     addChild(content, 'span', 'block-type', '对话分段');
     addChild(content, 'p', 'segment-title', block.title || '未命名分段');
     const perspective = (desktopState.data?.characters || []).find((item) => item.id === block.perspectiveCharacterId);
     addChild(content, 'small', 'segment-perspective', perspective ? `主视角：${perspective.name}` : '未设置主视角');
     if (block.perspectiveCharacterId) wrapper.dataset.perspectiveCharacterId = block.perspectiveCharacterId;
+    if (images.length) {
+      const gallery = addChild(content, 'div', 'segment-image-gallery');
+      images.forEach((image) => {
+        const figure = addChild(gallery, 'figure', 'segment-image-card');
+        const imageNode = addChild(figure, 'img'); imageNode.alt = image.name || '分段图片';
+        addChild(figure, 'figcaption', '', image.name || '未命名图片');
+        if (desktopState.filePath && image.relativePath) desktopApi.readAsset(desktopState.filePath, image.relativePath).then((src) => { if (src) imageNode.src = src; }).catch(() => figure.classList.add('asset-missing'));
+      });
+    }
   } else if (block.type === 'narration') {
-    addChild(content, 'span', 'block-type', '场景描述');
-    addChild(content, 'p', '', block.text);
+    const paragraph = addChild(content, 'p', 'narration-text', block.text);
+    paragraph.dataset.placeholder = '输入旁白内容…';
   } else if (block.type === 'choice') {
     addChild(wrapper, 'div', 'choice-icon', '↳'); addChild(content, 'span', 'block-type', '玩家选择'); addChild(content, 'p', 'choice-title', block.title);
     const choices = addChild(content, 'div', 'choices');
     (block.options || []).forEach((option) => { const button = addChild(choices, 'button'); addChild(button, 'span', 'choice-text', option); addChild(button, 'span', '', '→'); });
   } else {
     const character = (desktopState.data?.characters || []).find((item) => item.id === block.characterId || item.name === block.character);
+    const hasCharacter = Boolean(character || String(block.character || '').trim());
     if (!Array.isArray(block.statusTags)) block.statusTags = [block.statusTag || block.emotion || ''].map((tag) => String(tag).trim()).filter(Boolean);
     const isPerspective = perspectiveCharacterIdAt(index) && perspectiveCharacterIdAt(index) === (block.characterId || character?.id);
     if (isPerspective) wrapper.classList.add('pov-dialogue');
-    const thumb = addChild(wrapper, 'div', 'character-thumb', (block.character || '未').slice(0, 1)); thumb.style.background = block.characterColor || character?.color || '#f2674f';
-    const meta = addChild(content, 'div', 'dialogue-meta'); const nameNode = addChild(meta, 'span', 'character-name', block.character); nameNode.style.color = block.characterColor || character?.color || '#f2674f'; if (isPerspective) addChild(meta, 'span', 'pov-pill', '主视角'); (block.statusTags || []).forEach((statusTag) => addChild(meta, 'span', 'status-pill', statusTag)); addChild(meta, 'span', 'voice-pill', `♪ ${block.voice || '未设定'}`);
+    if (!hasCharacter) wrapper.classList.add('unassigned-dialogue');
+    const meta = addChild(content, 'div', 'dialogue-meta');
+    if (hasCharacter) {
+      const thumb = addChild(meta, 'div', 'character-thumb', (block.character || character?.name || '').slice(0, 1)); thumb.style.background = block.characterColor || character?.color || '#f2674f';
+      const nameNode = addChild(meta, 'span', 'character-name', block.character || character?.name || ''); nameNode.style.color = block.characterColor || character?.color || '#f2674f';
+    } else addChild(meta, 'span', 'unassigned-character-hint', '未设置角色');
+    if (isPerspective) addChild(meta, 'span', 'pov-pill', '主视角'); (block.statusTags || []).forEach((statusTag) => addChild(meta, 'span', 'status-pill', statusTag)); addChild(meta, 'span', 'voice-pill', `♪ ${block.voice || '未设定'}`);
     const paragraph = addChild(content, 'p');
     if (block.textHtml) paragraph.innerHTML = sanitizeRichTextHtml(block.textHtml); else paragraph.textContent = block.text || '';
     paragraph.style.textAlign = block.textAlign || 'left';
     if (block.note) addChild(content, 'div', 'block-note', `注：${block.note}`);
-    if (block.portrait) wrapper.dataset.portrait = block.portrait; if (block.portraitPreset) wrapper.dataset.portraitPreset = block.portraitPreset; if (block.characterId || character?.id) wrapper.dataset.characterId = block.characterId || character.id; wrapper.dataset.characterColor = block.characterColor || character?.color || '#f2674f';
-    void thumb;
+    if (block.portrait) wrapper.dataset.portrait = block.portrait; if (block.portraitPreset) wrapper.dataset.portraitPreset = block.portraitPreset; if (block.characterId || character?.id) wrapper.dataset.characterId = block.characterId || character.id; wrapper.dataset.characterColor = block.characterColor || character?.color || '#b8bcb8';
   }
   wrapper.appendChild(content);
   wrapper.querySelectorAll('p').forEach((paragraph) => { paragraph.contentEditable = 'true'; });
@@ -299,11 +321,12 @@ function createBlockElement(block, index) {
 
 function renderScene() {
   const scene = currentScene(); if (!scene) return;
-  const canvas = document.querySelector('.script-canvas'); const addButton = document.getElementById('addDialogue');
+  const canvas = document.querySelector('.script-canvas'); const addButton = document.getElementById('flowAddActions');
   canvas.querySelectorAll('.script-block').forEach((block) => block.remove());
   (scene.blocks || []).forEach((block, index) => canvas.insertBefore(createBlockElement(block, index), addButton));
   selectedBlockIndex = Math.min(selectedBlockIndex, Math.max(0, (scene.blocks || []).length - 1));
-  document.querySelector('.script-heading h1').textContent = scene.title;
+  document.getElementById('sceneTitle').textContent = scene.title;
+  document.getElementById('sceneSummary').textContent = scene.blocks?.length ? `${scene.blocks.length} 个内容块` : '空白场景';
   document.querySelector('.breadcrumb strong').textContent = `第 ${activeChapterIndex + 1} 章 · ${scene.title}`;
 }
 function renderSceneTabs() {
@@ -483,10 +506,20 @@ function bindAsset(asset, mode) { syncCurrentScene(); const scene = currentScene
 
 function syncDialogueCreationState() {
   const addButton = document.getElementById('addDialogue');
-  if (!addButton) return;
+  const select = document.getElementById('dialogueCharacterPicker');
+  const avatar = document.getElementById('dialogueCharacterPickerAvatar');
+  if (!addButton || !select || !avatar) return;
   const characters = desktopState.data?.characters || [];
   if (!characters.some((character) => character.id === newDialogueCharacterId)) newDialogueCharacterId = '';
-  addButton.disabled = !newDialogueCharacterId;
+  select.replaceChildren();
+  const none = addChild(select, 'option', '', '不设置角色'); none.value = '';
+  characters.forEach((character) => { const option = addChild(select, 'option', '', character.name); option.value = character.id; option.selected = character.id === newDialogueCharacterId; });
+  select.value = newDialogueCharacterId;
+  const selectedCharacter = characters.find((character) => character.id === newDialogueCharacterId);
+  avatar.textContent = selectedCharacter ? selectedCharacter.name.slice(0, 1) : '—';
+  avatar.style.background = selectedCharacter?.color || '#e6e8e5';
+  avatar.style.color = selectedCharacter ? '#fff' : '#9da29d';
+  addButton.disabled = false;
 }
 function updateProjectTitle(title) {
   const normalizedTitle = String(title || '').trim() || 'Rropeway';
@@ -505,7 +538,7 @@ async function renameProject() {
   markDirty();
   showToast(`项目已重命名为「${normalizedTitle}」`);
 }
-function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
+function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; document.body.classList.remove('project-home-active'); views.home?.classList.add('hidden'); desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); document.querySelector('[data-view="editor"]')?.click(); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
 function scheduleAutoSave(delay = 700) {
   clearTimeout(autoSaveTimer);
   if (!desktopState.filePath || !desktopState.dirty || restoringProjectHistory) return;
@@ -562,8 +595,38 @@ async function prepareProjectSwitch(message) {
   }
   return requestConfirmation(message);
 }
-async function openProject() { if (!(await prepareProjectSwitch('当前项目有未保存修改，确定打开另一个项目吗？'))) return; try { const result = await desktopApi.openProject(); if (result) { applyProject(result.data, result.filePath); showToast('项目已打开'); } } catch (error) { showToast(error.message || '打开失败'); } }
-async function newProject() { if (!(await prepareProjectSwitch('当前项目有未保存修改，确定新建项目吗？'))) return; const result = await desktopApi.newProject(); applyProject(result.data); showToast('已新建空白项目'); }
+function showProjectHome(resetForm = false) {
+  clearTimeout(autoSaveTimer);
+  desktopState = { filePath: null, data: null, dirty: false };
+  desktopApi?.setDirty(false);
+  projectHistory = [];
+  projectHistoryIndex = -1;
+  document.body.classList.add('project-home-active');
+  views.home?.classList.remove('hidden');
+  navItems.forEach((item) => item.classList.remove('active'));
+  document.getElementById('chapterList')?.replaceChildren();
+  document.getElementById('workspaceTitle').textContent = '未打开项目';
+  document.title = 'Rropeway · 本地剧本编辑器';
+  setProjectLocationStatus('本地');
+  setSaveStatus('未打开项目');
+  updateUndoAvailability();
+  if (resetForm) document.getElementById('projectCreateForm')?.reset();
+}
+async function createProjectFromHome(event) {
+  event?.preventDefault();
+  const title = document.getElementById('projectCreateName')?.value.trim();
+  const description = document.getElementById('projectCreateDescription')?.value.trim();
+  const directory = document.getElementById('projectCreateLocation')?.value.trim();
+  if (!title) { showToast('请输入仓库名称'); document.getElementById('projectCreateName')?.focus(); return; }
+  if (!directory) { showToast('请选择项目保存位置'); return; }
+  try {
+    const result = await desktopApi.createProject({ title, description, directory });
+    applyProject(result.data, result.filePath);
+    showToast('项目已创建');
+  } catch (error) { showToast(error.message || '项目创建失败'); }
+}
+async function openProject() { if (desktopState.data && !(await prepareProjectSwitch('当前项目有未保存修改，确定打开另一个项目吗？'))) return; try { const result = await desktopApi.openProject(); if (result) { applyProject(result.data, result.filePath); showToast('项目已打开'); } } catch (error) { showToast(error.message || '打开失败'); } }
+async function newProject() { if (desktopState.data && !(await prepareProjectSwitch('当前项目有未保存修改，确定新建项目吗？'))) return; showProjectHome(true); document.getElementById('projectCreateName')?.focus(); }
 async function importAssets() { if (!desktopState.filePath) { if (!(await saveProject())) return; } try { const assets = await desktopApi.importAssets(desktopState.filePath); if (!assets.length) return; desktopState.data.assets.push(...assets); renderImportedAssets(); markDirty(); showToast(`已导入 ${assets.length} 个素材`); } catch (error) { showToast(error.message || '素材导入失败'); } }
 function updatePreview() {
   syncCurrentScene();
@@ -590,8 +653,44 @@ function updatePreview() {
   }
 }
 
-navItems.forEach((item) => item.addEventListener('click', () => { const target = item.dataset.view; navItems.forEach((nav) => nav.classList.toggle('active', nav === item)); document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor'); views.characters.classList.toggle('hidden', target !== 'characters'); views.assets.classList.toggle('hidden', target !== 'assets'); document.querySelector('.breadcrumb span').textContent = target === 'characters' ? '角色与立绘' : target === 'assets' ? '素材库' : '剧本编辑器'; if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets(); }));
-document.addEventListener('click', (event) => { const block = event.target.closest('.script-block'); if (block) { selectedBlockIndex = Number(block.dataset.blockIndex || 0); document.querySelectorAll('.script-block').forEach((item) => item.classList.toggle('selected', item === block)); renderInspector(); } if (event.target.closest('#addDialogue')) { syncCurrentScene(); const character = desktopState.data.characters?.find((item) => item.id === newDialogueCharacterId); if (!character) { showToast('请先在右侧设置新增对白角色'); return; } currentScene().blocks.push({ type: 'dialogue', character: character.name, characterId: character.id, characterKey: 'mei', characterColor: character.color || '#f2674f', portraitPreset: character.portraitPreset || null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] p`)?.focus(); markDirty(); showToast('已添加一条对白'); } if (event.target.closest('#addSegment')) { syncCurrentScene(); const segmentNumber = currentScene().blocks.filter((item) => item.type === 'segment').length + 1; currentScene().blocks.push({ type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null }); selectedBlockIndex = currentScene().blocks.length - 1; renderScene(); markDirty(); showToast('已添加分段'); } });
+navItems.forEach((item) => item.addEventListener('click', () => { if (!desktopState.data) { showToast('请先创建或打开项目'); return; } const target = item.dataset.view; navItems.forEach((nav) => nav.classList.toggle('active', nav === item)); document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor'); views.characters.classList.toggle('hidden', target !== 'characters'); views.assets.classList.toggle('hidden', target !== 'assets'); document.querySelector('.breadcrumb span').textContent = target === 'characters' ? '角色与立绘' : target === 'assets' ? '素材库' : '剧本编辑器'; if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets(); }));
+document.addEventListener('click', (event) => {
+  const block = event.target.closest('.script-block');
+  if (block) {
+    selectedBlockIndex = Number(block.dataset.blockIndex || 0);
+    document.querySelectorAll('.script-block').forEach((item) => item.classList.toggle('selected', item === block));
+    renderInspector();
+  }
+  if (event.target.closest('#addDialogue')) {
+    syncCurrentScene();
+    const character = desktopState.data.characters?.find((item) => item.id === newDialogueCharacterId);
+    currentScene().blocks.push({ type: 'dialogue', character: character?.name || '', characterId: character?.id || '', characterKey: 'mei', characterColor: character?.color || '#b8bcb8', portraitPreset: character?.portraitPreset || null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' });
+    selectedBlockIndex = currentScene().blocks.length - 1;
+    renderScene();
+    document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] p`)?.focus();
+    markDirty();
+    showToast('已添加一条对白');
+  }
+  if (event.target.closest('#addNarration')) {
+    syncCurrentScene();
+    currentScene().blocks.push({ type: 'narration', text: '' });
+    selectedBlockIndex = currentScene().blocks.length - 1;
+    renderScene();
+    document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .narration-text`)?.focus();
+    markDirty();
+    showToast('已添加一条旁白');
+  }
+  if (event.target.closest('#addSegment')) {
+    syncCurrentScene();
+    const segmentNumber = currentScene().blocks.filter((item) => item.type === 'segment').length + 1;
+    currentScene().blocks.push({ type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null });
+    selectedBlockIndex = currentScene().blocks.length - 1;
+    renderScene();
+    markDirty();
+    showToast('已添加分段');
+  }
+});
+document.getElementById('dialogueCharacterPicker')?.addEventListener('change', (event) => { newDialogueCharacterId = event.target.value; syncDialogueCreationState(); });
 document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { if (event.target.closest('.segment-title')) renderSegmentNavigator(); markDirty(); } });
 document.querySelector('[title="撤销"]')?.addEventListener('click', undoProjectChange);
 document.querySelector('[title="重做"]')?.addEventListener('click', redoProjectChange);
@@ -721,6 +820,9 @@ function renderProjectSearchResults() {
 }
 document.getElementById('projectSearchInput')?.addEventListener('input', renderProjectSearchResults);
 document.getElementById('projectSearchInput')?.addEventListener('focus', renderProjectSearchResults);
+document.getElementById('projectCreateForm')?.addEventListener('submit', createProjectFromHome);
+document.getElementById('chooseProjectLocationBtn')?.addEventListener('click', async () => { const directory = await desktopApi.chooseProjectDirectory(); if (directory) document.getElementById('projectCreateLocation').value = directory; });
+document.getElementById('openProjectFromHomeBtn')?.addEventListener('click', openProject);
 document.getElementById('previewBtn')?.addEventListener('click', () => { updatePreview(); document.getElementById('previewModal').classList.remove('hidden'); }); document.getElementById('closePreview')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden')); document.querySelector('.modal-backdrop')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden'));
 document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeWindowProjectMenu(); closeWindowSettingsMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k') { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); closeWindowProjectMenu(); setWindowSettingsMenuOpen(true); } });
 applyThemePreference(currentThemePreference(), false);
@@ -737,17 +839,6 @@ function createInspectorSection(body, title, description = '') {
   addChild(section, 'h3', '', title);
   if (description) addChild(section, 'p', 'inspector-section-description', description);
   return section;
-}
-function renderDialogueCreationSettings(body) {
-  const section = createInspectorSection(body, '新增对白设置', '先选择角色，再使用对白流底部的“添加对白”。');
-  const characters = desktopState.data?.characters || [];
-  const group = addChild(section, 'div', 'property-group'); addChild(group, 'label', '', '新增对白角色');
-  const select = addChild(group, 'select', 'select-control editor-select');
-  const placeholder = addChild(select, 'option', '', characters.length ? '请选择角色' : '暂无角色，请先创建'); placeholder.value = ''; placeholder.disabled = !characters.length;
-  characters.forEach((character) => { const option = addChild(select, 'option', '', character.name); option.value = character.id; option.selected = newDialogueCharacterId === character.id; });
-  select.disabled = !characters.length;
-  select.addEventListener('change', () => { newDialogueCharacterId = select.value; syncDialogueCreationState(); });
-  syncDialogueCreationState();
 }
 function selectedDialogueParagraph() { return document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .block-content p[contenteditable="true"]`); }
 function rememberTextSelection() {
@@ -792,16 +883,81 @@ function renderTextFormattingSettings(body, block) {
   addCommandButton('I', '斜体', 'italic').classList.add('italic');
   addCommandButton('U', '下划线', 'underline').classList.add('underline');
   addCommandButton('S', '删除线', 'strikeThrough').classList.add('strike');
+  addCommandButton('x²', '上标', 'superscript');
+  addCommandButton('x₂', '下标', 'subscript');
+  addCommandButton('↶', '撤销文字编辑', 'undo');
+  addCommandButton('↷', '重做文字编辑', 'redo');
+  const fontSelect = addChild(toolbar, 'select', 'text-format-select text-font-select');
+  [['', '字体'], ['Microsoft YaHei', '微软雅黑'], ['SimSun', '宋体'], ['KaiTi', '楷体'], ['Arial', 'Arial']].forEach(([value, label]) => { const option = addChild(fontSelect, 'option', '', label); option.value = value; });
+  fontSelect.addEventListener('change', () => { if (fontSelect.value) applyInlineTextFormat('fontName', fontSelect.value); fontSelect.value = ''; });
   const sizeSelect = addChild(toolbar, 'select', 'text-format-select');
   [['3', '正常'], ['4', '较大'], ['5', '大字'], ['6', '标题']].forEach(([value, label]) => { const option = addChild(sizeSelect, 'option', '', label); option.value = value; });
   sizeSelect.addEventListener('change', () => { applyInlineTextFormat('fontSize', sizeSelect.value); sizeSelect.value = '3'; });
   const colorLabel = addChild(toolbar, 'label', 'text-color-control'); addChild(colorLabel, 'span', '', 'A');
   const colorInput = addChild(colorLabel, 'input'); colorInput.type = 'color'; colorInput.value = '#2d302f'; colorInput.title = '文字颜色'; colorInput.addEventListener('input', () => applyInlineTextFormat('foreColor', colorInput.value));
+  const highlightLabel = addChild(toolbar, 'label', 'text-color-control text-highlight-control'); addChild(highlightLabel, 'span', '', '▰');
+  const highlightInput = addChild(highlightLabel, 'input'); highlightInput.type = 'color'; highlightInput.value = '#ffe1a8'; highlightInput.title = '文字高亮'; highlightInput.addEventListener('input', () => applyInlineTextFormat('hiliteColor', highlightInput.value));
   const alignment = addChild(section, 'div', 'text-alignment-row');
   [['left', '左对齐'], ['center', '居中'], ['right', '右对齐']].forEach(([value, title]) => { const button = addChild(alignment, 'button', `text-align-button${(block.textAlign || 'left') === value ? ' active' : ''}`, value === 'left' ? '≡' : value === 'center' ? '≣' : '≡'); button.type = 'button'; button.title = title; if (value === 'right') button.classList.add('align-right-icon'); button.addEventListener('click', () => { applyParagraphAlignment(value); renderInspector(); }); });
   const clear = addChild(alignment, 'button', 'text-clear-button', '清除格式'); clear.type = 'button'; clear.addEventListener('mousedown', (event) => event.preventDefault()); clear.addEventListener('click', () => applyInlineTextFormat('removeFormat'));
 }
 document.addEventListener('selectionchange', rememberTextSelection);
+const IMAGE_ASSET_TYPES = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
+function segmentImageFromAsset(asset) {
+  return { id: `segment-image-${Date.now()}-${Math.random().toString(16).slice(2)}`, assetId: asset.id || '', name: asset.name || '未命名图片', relativePath: asset.relativePath };
+}
+function refreshSegmentImages(message) {
+  renderScene();
+  renderInspector();
+  renderImportedAssets();
+  markDirty();
+  if (message) showToast(message);
+}
+async function importImagesIntoSegment(segment) {
+  if (!desktopState.filePath && !(await saveProject())) return;
+  try {
+    const assets = await desktopApi.importImages(desktopState.filePath);
+    if (!assets.length) return;
+    desktopState.data.assets.push(...assets);
+    segment.images ||= [];
+    segment.images.push(...assets.map(segmentImageFromAsset));
+    refreshSegmentImages(`已添加 ${assets.length} 张分段图片`);
+  } catch (error) { showToast(error.message || '图片导入失败'); }
+}
+function renderSegmentImageSettings(section, segment) {
+  segment.images ||= [];
+  const imageGroup = addChild(section, 'div', 'property-group segment-image-settings');
+  addChild(imageGroup, 'label', '', '分段图片');
+  if (!segment.images.length) addChild(imageGroup, 'div', 'inspector-empty compact', '尚未添加图片，可从本地或素材库选择多张图片。');
+  const list = addChild(imageGroup, 'div', 'segment-image-inspector-list');
+  segment.images.forEach((image, imageIndex) => {
+    const row = addChild(list, 'div', 'segment-image-inspector-row');
+    const thumbnail = addChild(row, 'img'); thumbnail.alt = image.name || '分段图片';
+    if (desktopState.filePath && image.relativePath) desktopApi.readAsset(desktopState.filePath, image.relativePath).then((src) => { if (src) thumbnail.src = src; }).catch(() => row.classList.add('asset-missing'));
+    const copy = addChild(row, 'div', 'segment-image-inspector-copy'); addChild(copy, 'b', '', image.name || '未命名图片'); addChild(copy, 'small', '', `${imageIndex + 1} / ${segment.images.length}`);
+    const actions = addChild(row, 'div', 'segment-image-inspector-actions');
+    const up = addChild(actions, 'button', '', '↑'); up.type = 'button'; up.title = '前移'; up.disabled = imageIndex === 0;
+    const down = addChild(actions, 'button', '', '↓'); down.type = 'button'; down.title = '后移'; down.disabled = imageIndex === segment.images.length - 1;
+    const remove = addChild(actions, 'button', 'danger', '×'); remove.type = 'button'; remove.title = '移除';
+    up.addEventListener('click', () => { const [moved] = segment.images.splice(imageIndex, 1); segment.images.splice(imageIndex - 1, 0, moved); refreshSegmentImages('图片顺序已调整'); });
+    down.addEventListener('click', () => { const [moved] = segment.images.splice(imageIndex, 1); segment.images.splice(imageIndex + 1, 0, moved); refreshSegmentImages('图片顺序已调整'); });
+    remove.addEventListener('click', () => { segment.images.splice(imageIndex, 1); refreshSegmentImages('已从分段移除图片'); });
+  });
+  const actions = addChild(imageGroup, 'div', 'segment-image-source-actions');
+  const localButton = addChild(actions, 'button', 'file-button', '从本地选择'); localButton.type = 'button'; localButton.addEventListener('click', () => importImagesIntoSegment(segment));
+  const assetSelect = addChild(actions, 'select', 'select-control editor-select');
+  const availableAssets = (desktopState.data.assets || []).filter((asset) => IMAGE_ASSET_TYPES.has(String(asset.type).toLowerCase()));
+  const placeholder = addChild(assetSelect, 'option', '', availableAssets.length ? '从素材库选择' : '素材库暂无图片'); placeholder.value = ''; placeholder.disabled = !availableAssets.length;
+  availableAssets.forEach((asset) => { const option = addChild(assetSelect, 'option', '', asset.name); option.value = asset.id; });
+  const addAssetButton = addChild(actions, 'button', 'file-button', '添加'); addAssetButton.type = 'button'; addAssetButton.disabled = !availableAssets.length;
+  addAssetButton.addEventListener('click', () => {
+    const asset = availableAssets.find((item) => item.id === assetSelect.value);
+    if (!asset) { showToast('请先选择素材库图片'); return; }
+    if (segment.images.some((image) => image.relativePath === asset.relativePath)) { showToast('这张图片已经在当前分段中'); return; }
+    segment.images.push(segmentImageFromAsset(asset));
+    refreshSegmentImages('已从素材库添加图片');
+  });
+}
 function renderInspector() {
   const body = document.querySelector('.inspector-body'); if (!body) return; body.replaceChildren();
   const header = document.querySelector('.inspector-header span');
@@ -818,6 +974,11 @@ function renderInspector() {
     const none = addChild(perspectiveSelect, 'option', '', '不设置主视角'); none.value = '';
     (desktopState.data.characters || []).forEach((character) => { const option = addChild(perspectiveSelect, 'option', '', character.name); option.value = character.id; option.selected = selectedBlock.perspectiveCharacterId === character.id; });
     perspectiveSelect.addEventListener('change', () => { selectedBlock.perspectiveCharacterId = perspectiveSelect.value || null; renderScene(); markDirty(); });
+    renderSegmentImageSettings(properties, selectedBlock);
+  } else if (selectedBlock?.type === 'narration') {
+    if (header) header.textContent = '旁白';
+    const properties = createInspectorSection(body, '当前旁白');
+    addChild(properties, 'div', 'inspector-empty compact', '旁白无需设置角色、状态标签或立绘，直接在左侧编辑内容。');
   } else {
     if (header) header.textContent = '对白属性';
     dialogueBlock = activeDialogueBlock();
@@ -827,9 +988,9 @@ function renderInspector() {
       const characters = desktopState.data.characters || [];
       const characterGroup = addChild(properties, 'div', 'property-group'); addChild(characterGroup, 'label', '', '当前角色');
       const characterSelect = addChild(characterGroup, 'select', 'select-control editor-select');
+      const noCharacter = addChild(characterSelect, 'option', '', '未设置角色'); noCharacter.value = ''; noCharacter.selected = !dialogueBlock.characterId && !dialogueBlock.character;
       characters.forEach((character) => { const option = addChild(characterSelect, 'option', '', character.name); option.value = character.id; if (character.name === dialogueBlock.character) option.selected = true; });
-      if (!characters.length) { const option = addChild(characterSelect, 'option', '', '暂无角色，请先创建'); option.disabled = true; }
-      characterSelect.addEventListener('change', () => { const character = characters.find((item) => item.id === characterSelect.value); if (!character) return; applyCharacterToBlock(character, dialogueBlock); renderScene(); markDirty(); });
+      characterSelect.addEventListener('change', () => { const character = characters.find((item) => item.id === characterSelect.value); if (character) applyCharacterToBlock(character, dialogueBlock); else { dialogueBlock.character = ''; dialogueBlock.characterId = ''; dialogueBlock.characterColor = '#b8bcb8'; dialogueBlock.portraitPreset = null; dialogueBlock.portrait = undefined; } renderScene(); markDirty(); });
       const statusGroup = addChild(properties, 'div', 'property-group'); addChild(statusGroup, 'label', '', '状态标签');
       const statusEditor = addChild(statusGroup, 'div', 'status-tag-editor');
       (dialogueBlock.statusTags || []).forEach((statusTag, tagIndex) => { const chip = addChild(statusEditor, 'span', 'status-tag-chip'); addChild(chip, 'span', '', statusTag); const removeTag = addChild(chip, 'button', '', '×'); removeTag.type = 'button'; removeTag.title = '删除标签'; removeTag.addEventListener('click', () => { dialogueBlock.statusTags.splice(tagIndex, 1); renderScene(); markDirty(); }); });
@@ -846,8 +1007,7 @@ function renderInspector() {
       const noteGroup = addChild(properties, 'div', 'property-group'); addChild(noteGroup, 'label', '', '创作备注'); const note = addChild(noteGroup, 'textarea', '', dialogueBlock.note || ''); note.placeholder = '给自己留下一句创作提示…'; note.addEventListener('input', () => { dialogueBlock.note = note.value; markDirty(); });
     }
   }
-  renderDialogueCreationSettings(body);
-  renderTextFormattingSettings(body, dialogueBlock);
+  if (selectedBlock?.type !== 'narration') renderTextFormattingSettings(body, dialogueBlock);
 }
 function applyCharacterToBlock(character, block) {
   block.character = character.name;
@@ -958,8 +1118,8 @@ async function initializeProject() {
       localStorage.removeItem('scriptroom-draft');
     }
   }
-  const filePath = lastProjectPath() || recentProjects()[0]?.filePath || '';
-  if (filePath) {
+  const candidates = [lastProjectPath(), ...recentProjects().map((item) => item.filePath)].filter((filePath, index, paths) => filePath && paths.indexOf(filePath) === index);
+  for (const filePath of candidates) {
     try {
       if (await desktopApi.projectExists(filePath)) {
         const result = await desktopApi.openProjectPath(filePath);
@@ -968,10 +1128,9 @@ async function initializeProject() {
       }
     } catch {}
     forgetRecentProject(filePath);
-    showToast('上次打开的项目已不存在，已清理历史记录');
   }
-  const result = await desktopApi.newProject();
-  applyProject(result.data);
+  if (candidates.length) showToast('不存在的项目已从历史记录中清理');
+  showProjectHome(true);
 }
 async function openRecentProject(filePath) {
   if (filePath === desktopState.filePath) { document.querySelector('[data-view="editor"]').click(); return; }
@@ -994,10 +1153,13 @@ function openProjectMenu() {
   const menu = node('div', 'project-popover');
   addChild(menu, 'div', 'project-popover-title', '项目列表');
   const list = addChild(menu, 'div', 'project-list');
-  const entries = [{ filePath: desktopState.filePath, title: desktopState.data?.title || '未命名项目', current: true }];
+  const entries = [];
+  if (desktopState.data) entries.push({ filePath: desktopState.filePath, title: desktopState.data.title || '未命名项目', current: true });
   recentProjects().filter((item) => item.filePath !== desktopState.filePath).forEach((item) => entries.push({ ...item, current: false }));
+  if (!entries.length) addChild(list, 'div', 'project-list-empty', '暂无本地项目，点击“新建项目”创建仓库。');
   entries.forEach((project) => {
-    const item = addChild(list, 'button', `project-list-item${project.current ? ' current' : ''}`);
+    const row = addChild(list, 'div', `project-list-row${project.current ? ' current' : ''}`);
+    const item = addChild(row, 'button', `project-list-item${project.current ? ' current' : ''}`);
     const copy = addChild(item, 'span', 'project-list-copy');
     const projectTitle = addChild(copy, 'b', '', project.title); projectTitle.title = project.title;
     const projectPath = addChild(copy, 'small', '', project.filePath || '尚未保存到磁盘'); projectPath.title = project.filePath || '尚未保存到磁盘';
@@ -1007,6 +1169,10 @@ function openProjectMenu() {
       if (project.filePath) openRecentProject(project.filePath);
       else document.querySelector('[data-view="editor"]').click();
     });
+    if (project.filePath) {
+      const remove = addChild(row, 'button', 'project-list-delete', '×'); remove.type = 'button'; remove.title = `删除项目「${project.title}」`;
+      remove.addEventListener('click', async (event) => { event.stopPropagation(); menu.remove(); await deleteProjectEntry(project); });
+    }
   });
   document.body.appendChild(menu);
   const anchor = document.getElementById('workspaceSwitcher').getBoundingClientRect();
@@ -1022,6 +1188,29 @@ function updateEditorScrollTools() {
   let activeMarker = null;
   navigator.querySelectorAll('.segment-nav-marker').forEach((marker) => { if (panel.scrollTop + 120 >= Number(marker.dataset.target || 0)) activeMarker = marker; marker.classList.remove('active'); });
   activeMarker?.classList.add('active');
+}
+async function deleteProjectEntry(project) {
+  if (!project?.filePath) return;
+  const confirmed = await requestConfirmation(`确定删除项目“${project.title}”吗？\n项目文件、备份和同目录 assets 素材文件夹将移入回收站，历史记录也会删除。`);
+  if (!confirmed) return;
+  try {
+    await desktopApi.deleteProject(project.filePath);
+    forgetRecentProject(project.filePath);
+    const deletingCurrent = project.filePath === desktopState.filePath;
+    if (deletingCurrent) {
+      localStorage.removeItem('scriptroom-draft');
+      desktopState.dirty = false;
+      desktopApi.setDirty(false);
+      showProjectHome(true);
+      for (const nextProject of recentProjects()) {
+        if (!(await desktopApi.projectExists(nextProject.filePath))) { forgetRecentProject(nextProject.filePath); continue; }
+        const result = await desktopApi.openProjectPath(nextProject.filePath);
+        applyProject(result.data, result.filePath);
+        break;
+      }
+    }
+    showToast('项目已移入回收站');
+  } catch (error) { showToast(error.message || '项目删除失败'); }
 }
 function renderSegmentNavigator() {
   requestAnimationFrame(() => {

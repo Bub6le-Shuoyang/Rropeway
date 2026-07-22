@@ -25,6 +25,20 @@
       </aside>
 
       <main class="main-content">
+        <section class="project-home-view hidden" id="projectHomeView">
+          <div class="project-home-card">
+            <div class="project-home-mark">✦</div>
+            <div class="eyebrow">LOCAL STORY WORKSPACE</div>
+            <h1>创建你的第一个项目仓库</h1>
+            <p>项目会保存在你选择的本地文件夹中，剧本、角色和素材均无需联网。</p>
+            <form class="project-create-form" id="projectCreateForm">
+              <label><span>仓库名称</span><input id="projectCreateName" type="text" maxlength="80" placeholder="例如：星海旅途" required /></label>
+              <label><span>项目简介</span><textarea id="projectCreateDescription" rows="3" maxlength="300" placeholder="简单描述故事主题或协作约定（可选）"></textarea></label>
+              <label><span>保存位置</span><div class="project-location-picker"><input id="projectCreateLocation" type="text" readonly placeholder="请选择本地文件夹" /><button class="file-button" id="chooseProjectLocationBtn" type="button">选择文件夹</button></div></label>
+              <div class="project-home-actions"><button class="primary-button" type="submit">创建项目</button><button class="file-button" id="openProjectFromHomeBtn" type="button">打开已有项目</button></div>
+            </form>
+          </div>
+        </section>
         <header class="topbar">
           <div class="breadcrumb"><span>剧本编辑器</span><span>/</span><strong>第一章 · 未命名场景</strong></div>
           <div class="project-search" id="projectSearch"><span class="project-search-icon">⌕</span><input id="projectSearchInput" type="search" autocomplete="off" placeholder="搜索章节、场景、角色或对白" aria-label="搜索项目信息" /><div class="project-search-results hidden" id="projectSearchResults" hidden></div></div>
@@ -32,13 +46,20 @@
 
         <div class="editor-layout">
           <section class="script-panel" id="editorView">
-            <div class="script-heading"><div><div class="eyebrow">SCRIPT EDITOR</div><h1>未命名场景</h1><p class="muted">空白场景</p></div><div class="heading-actions"><button class="primary-button" id="previewBtn">▶ 预览</button></div></div>
+            <div class="section-title script-heading"><div><div class="eyebrow">SCRIPT EDITOR</div><h2 id="sceneTitle">未命名场景</h2><p class="muted" id="sceneSummary">空白场景</p></div><div class="heading-actions"><button class="primary-button" id="previewBtn">▶ 预览</button></div></div>
             <div class="scene-tabs"></div>
             <div class="script-canvas">
               <div class="canvas-toolbar"><span>对白流</span><div class="toolbar-spacer"></div><button class="toolbar-icon" title="撤销">↶</button><button class="toolbar-icon" title="重做">↷</button></div>
               <div class="timeline-line"></div>
-              <button class="add-block" id="addDialogue" disabled><span>＋</span> 添加对白</button>
-              <button class="add-block add-segment" id="addSegment"><span>＋</span> 添加分段</button>
+              <div class="flow-add-actions" id="flowAddActions" aria-label="新增剧本内容">
+                <label class="dialogue-character-picker" title="设置新增对白角色">
+                  <span class="dialogue-character-picker-avatar" id="dialogueCharacterPickerAvatar" aria-hidden="true">—</span>
+                  <select id="dialogueCharacterPicker" aria-label="设置新增对白角色"><option value="">不设置角色</option></select>
+                </label>
+                <button class="flow-add-action" id="addDialogue" type="button" title="添加对话" aria-label="添加对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5h14v9H9l-4 3v-12Z"/><path d="M8.5 10h7M8.5 13h4.5"/></svg><small>对话</small></button>
+                <button class="flow-add-action" id="addNarration" type="button" title="添加旁白" aria-label="添加旁白"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10M7 11h10M7 15h6"/><path d="M5 4.5h14v15H5z"/></svg><small>旁白</small></button>
+                <button class="flow-add-action" id="addSegment" type="button" title="添加分段" aria-label="添加分段"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16"/><circle cx="12" cy="12" r="2.5"/></svg><small>分段</small></button>
+              </div>
             </div>
           </section>
 

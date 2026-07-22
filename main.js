@@ -37,7 +37,66 @@ async function chooseProject() {
   const result = await dialog.showOpenDialog(mainWindow, { title: '打开 Rropeway 项目', properties: ['openFile'], filters: [{ name: 'Rropeway 项目', extensions: ['scriptroom', 'json'] }] });
   return result.canceled ? null : result.filePaths[0];
 }
+function sanitizeProjectName(value) {
+  const name = String(value || 'Rropeway').trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '');
+  return name || 'Rropeway';
+}
+async function writeProjectFile(target, data) {
+  const normalized = { ...normalizeProject(data), updatedAt: new Date().toISOString() };
+  const tempPath = `${target}.${process.pid}.tmp`;
+  const backupPath = `${target}.backup`;
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(tempPath, JSON.stringify(normalized, null, 2), 'utf8');
+  try { await fs.copyFile(target, backupPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await fs.rm(target, { force: true });
+  await fs.rename(tempPath, target);
+  rendererDirty = false;
+  return { filePath: target, data: normalized };
+}
+async function importAssetFiles(projectPath, imageOnly = false) {
+  if (!projectPath) throw new Error('请先保存项目，再导入素材');
+  const extensions = imageOnly ? ['png', 'jpg', 'jpeg', 'webp', 'gif'] : ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp3', 'wav', 'ogg'];
+  const result = await dialog.showOpenDialog(mainWindow, { title: imageOnly ? '选择分段图片' : '导入本地素材', properties: ['openFile', 'multiSelections'], filters: [{ name: imageOnly ? '图片' : '图片与音频', extensions }] });
+  if (result.canceled) return [];
+  const assetDir = path.join(path.dirname(projectPath), 'assets');
+  await fs.mkdir(assetDir, { recursive: true });
+  const imported = [];
+  for (const source of result.filePaths) {
+    const safeName = `${crypto.randomUUID()}-${path.basename(source).replace(/[^\w.\-\u4e00-\u9fff]/g, '_')}`;
+    await fs.copyFile(source, path.join(assetDir, safeName));
+    imported.push({ id: crypto.randomUUID(), name: path.basename(source), fileName: safeName, relativePath: path.join('assets', safeName).replaceAll('\\', '/'), type: path.extname(source).slice(1).toLowerCase() });
+  }
+  return imported;
+}
+async function trashIfExists(target) {
+  try { await fs.stat(target); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  await shell.trashItem(target);
+}
 ipcMain.handle('project:new', () => ({ filePath: null, data: clone(DEFAULT_PROJECT) }));
+ipcMain.handle('project:choose-directory', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, { title: '选择项目保存位置', properties: ['openDirectory', 'createDirectory'] });
+  return result.canceled ? null : result.filePaths[0];
+});
+ipcMain.handle('project:create', async (_event, payload) => {
+  const title = String(payload?.title || '').trim();
+  const directory = String(payload?.directory || '').trim();
+  if (!title) throw new Error('请输入项目名称');
+  if (!directory) throw new Error('请选择项目保存位置');
+  const baseName = sanitizeProjectName(title);
+  let target = path.join(directory, `${baseName}.scriptroom`);
+  let suffix = 2;
+  while (true) {
+    try { await fs.access(target); target = path.join(directory, `${baseName} (${suffix}).scriptroom`); suffix += 1; }
+    catch (error) { if (error.code === 'ENOENT') break; throw error; }
+  }
+  return writeProjectFile(target, { ...clone(DEFAULT_PROJECT), title, description: String(payload?.description || '').trim() });
+});
+ipcMain.handle('project:delete', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !['.scriptroom', '.json'].includes(path.extname(filePath).toLowerCase())) throw new Error('项目路径无效');
+  const targets = [path.join(path.dirname(filePath), 'assets'), `${filePath}.backup`, filePath];
+  for (const target of targets) await trashIfExists(target);
+  return true;
+});
 ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('project:exists', async (_event, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return false;
@@ -55,7 +114,8 @@ ipcMain.handle('project:open-path', async (_event, filePath) => {
   if (typeof filePath !== 'string' || !['.scriptroom', '.json'].includes(path.extname(filePath).toLowerCase())) throw new Error('项目路径无效');
   try { return { filePath, data: normalizeProject(JSON.parse(await fs.readFile(filePath, 'utf8'))) }; }
   catch (error) { throw new Error(`项目文件无法读取：${error.message}`); }
-});ipcMain.handle('project:save', async (_event, payload) => {
+});
+ipcMain.handle('project:save', async (_event, payload) => {
   const data = normalizeProject(payload?.data);
   let target = payload?.filePath;
   if (!target) {
@@ -64,30 +124,12 @@ ipcMain.handle('project:open-path', async (_event, filePath) => {
     target = result.filePath;
   }
   if (!target.toLowerCase().endsWith('.scriptroom')) target += '.scriptroom';
-  const normalized = { ...data, updatedAt: new Date().toISOString() };
-  const tempPath = `${target}.${process.pid}.tmp`;
-  const backupPath = `${target}.backup`;
-  await fs.writeFile(tempPath, JSON.stringify(normalized, null, 2), 'utf8');
-  try { await fs.copyFile(target, backupPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  await fs.rm(target, { force: true });
-  await fs.rename(tempPath, target);
-  rendererDirty = false;
-  return { filePath: target, data: normalized };
+  return writeProjectFile(target, data);
 });
 ipcMain.handle('asset:import', async (_event, { projectPath }) => {
-  if (!projectPath) throw new Error('请先保存项目，再导入素材');
-  const result = await dialog.showOpenDialog(mainWindow, { title: '导入本地素材', properties: ['openFile', 'multiSelections'], filters: [{ name: '图片与音频', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp3', 'wav', 'ogg'] }] });
-  if (result.canceled) return [];
-  const assetDir = path.join(path.dirname(projectPath), 'assets');
-  await fs.mkdir(assetDir, { recursive: true });
-  const imported = [];
-  for (const source of result.filePaths) {
-    const safeName = `${crypto.randomUUID()}-${path.basename(source).replace(/[^\w.\-\u4e00-\u9fff]/g, '_')}`;
-    await fs.copyFile(source, path.join(assetDir, safeName));
-    imported.push({ id: crypto.randomUUID(), name: path.basename(source), fileName: safeName, relativePath: path.join('assets', safeName).replaceAll('\\', '/'), type: path.extname(source).slice(1).toLowerCase() });
-  }
-  return imported;
+  return importAssetFiles(projectPath, false);
 });
+ipcMain.handle('asset:import-images', async (_event, { projectPath }) => importAssetFiles(projectPath, true));
 ipcMain.handle('asset:read', async (_event, { projectPath, relativePath }) => {
   const filePath = projectAssetPath(projectPath, relativePath);
   const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }[path.extname(filePath).toLowerCase()];
