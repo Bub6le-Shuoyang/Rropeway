@@ -13,11 +13,30 @@ const DEFAULT_PROJECT = {
 };
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
-function normalizeBlock(block) {
+let generatedIdCounter = 0;
+function generatedId(prefix, index) {
+  generatedIdCounter += 1;
+  return `${prefix}-${Date.now()}-${generatedIdCounter}-${index}`;
+}
+function blockId(value, type, index) {
+  return String(value.id || generatedId(type, index));
+}
+function normalizeChoiceOption(option, index) {
+  if (option && typeof option === 'object') {
+    return {
+      id: String(option.id || generatedId('choice-option', index)),
+      text: String(option.text || ''),
+      targetBlockId: option.targetBlockId ? String(option.targetBlockId) : ''
+    };
+  }
+  return { id: generatedId('choice-option', index), text: String(option || ''), targetBlockId: '' };
+}
+function normalizeBlock(block, index = 0) {
   const value = block && typeof block === 'object' ? block : {};
-  if (value.type === 'choice') return { type: 'choice', title: String(value.title || ''), options: Array.isArray(value.options) ? value.options.map(String) : [] };
-  if (value.type === 'narration') return { type: 'narration', text: String(value.text || '') };
+  if (value.type === 'choice') return { id: blockId(value, 'choice', index), type: 'choice', title: String(value.title || ''), options: Array.isArray(value.options) ? value.options.map(normalizeChoiceOption) : [] };
+  if (value.type === 'narration') return { id: blockId(value, 'narration', index), type: 'narration', text: String(value.text || '') };
   if (value.type === 'segment') return {
+    id: blockId(value, 'segment', index),
     type: 'segment',
     title: String(value.title || '未命名分段'),
     perspectiveCharacterId: value.perspectiveCharacterId ? String(value.perspectiveCharacterId) : null,
@@ -29,8 +48,8 @@ function normalizeBlock(block) {
     })).filter((image) => image.relativePath) : []
   };
   const legacyStatusTag = String(value.statusTag ?? value.emotion ?? '').trim();
-  const statusTags = (Array.isArray(value.statusTags) ? value.statusTags : legacyStatusTag ? [legacyStatusTag] : []).map((tag) => String(tag).trim()).filter((tag, index, tags) => tag && tags.indexOf(tag) === index);
-  return { type: 'dialogue', character: String(value.character || ''), characterId: value.characterId ? String(value.characterId) : '', characterKey: value.characterKey === 'yan' ? 'yan' : 'mei', characterColor: String(value.characterColor || '#b8bcb8'), portraitPreset: value.portraitPreset ? String(value.portraitPreset) : null, statusTags, voice: String(value.voice || ''), text: String(value.text || ''), textHtml: String(value.textHtml || ''), textAlign: ['left', 'center', 'right'].includes(value.textAlign) ? value.textAlign : 'left', note: String(value.note || ''), portrait: value.portrait ? String(value.portrait) : undefined };
+  const statusTags = (Array.isArray(value.statusTags) ? value.statusTags : legacyStatusTag ? [legacyStatusTag] : []).map((tag) => String(tag).trim()).filter((tag, index, tags) => tag && tags.indexOf(tag) === index).sort((left, right) => Number(right === '关键节点') - Number(left === '关键节点'));
+  return { id: blockId(value, 'dialogue', index), type: 'dialogue', character: String(value.character || ''), characterId: value.characterId ? String(value.characterId) : '', characterKey: value.characterKey === 'yan' ? 'yan' : 'mei', characterColor: String(value.characterColor || '#b8bcb8'), portraitPreset: value.portraitPreset ? String(value.portraitPreset) : null, statusTags, voice: String(value.voice || ''), text: String(value.text || ''), textHtml: String(value.textHtml || ''), textAlign: ['left', 'center', 'right'].includes(value.textAlign) ? value.textAlign : 'left', note: String(value.note || ''), portrait: value.portrait ? String(value.portrait) : undefined };
 }
 function normalizeCharacter(character, index) {
   const value = character && typeof character === 'object' ? character : {};
