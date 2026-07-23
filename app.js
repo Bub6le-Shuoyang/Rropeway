@@ -23,6 +23,12 @@ let segmentSlideshowTimers = new Set();
 let previewState = null;
 let previewRenderToken = 0;
 let selectedRelationshipId = '';
+let relationshipResizeObserver = null;
+const RELATIONSHIP_ZOOM_STORAGE_KEY = 'rropeway-relationship-zoom';
+const MIN_RELATIONSHIP_ZOOM = 0.7;
+const MAX_RELATIONSHIP_ZOOM = 1.4;
+function clampRelationshipZoom(value) { return Math.round(Math.min(MAX_RELATIONSHIP_ZOOM, Math.max(MIN_RELATIONSHIP_ZOOM, Number(value) || 1)) * 10) / 10; }
+let relationshipZoom = clampRelationshipZoom(localStorage.getItem(RELATIONSHIP_ZOOM_STORAGE_KEY));
 const normalizedAvatarSourceCache = new Map();
 const expandedChapterIds = new Set();
 let draggedChapterId = null;
@@ -265,6 +271,31 @@ function characterDefaultMedia(character, groupName) {
 function loadProjectImage(relativePath, image, container = image) {
   if (!desktopState.filePath || !relativePath || !image) return;
   desktopApi.readAsset(desktopState.filePath, relativePath).then((src) => { if (src && image.isConnected) image.src = src; }).catch(() => container?.classList.add('asset-missing'));
+}
+function renderCharacterDefaultAvatar(container, character, imageClass = '') {
+  if (!container) return;
+  const fallbackText = String(character?.name || '').trim().slice(0, 1) || '—';
+  const defaultAvatar = characterDefaultMedia(character, 'avatarGroup');
+  const showFallback = () => {
+    if (!container.isConnected) return;
+    container.classList.remove('has-avatar-image');
+    container.classList.add('asset-missing');
+    container.replaceChildren(document.createTextNode(fallbackText));
+  };
+  container.replaceChildren();
+  container.classList.remove('has-avatar-image', 'asset-missing');
+  if (!defaultAvatar?.relativePath || !desktopState.filePath) {
+    container.textContent = fallbackText;
+    return;
+  }
+  const image = addChild(container, 'img', imageClass);
+  image.alt = `${character.name || '角色'}头像`;
+  image.addEventListener('load', () => { if (container.isConnected) container.classList.add('has-avatar-image'); }, { once: true });
+  image.addEventListener('error', showFallback, { once: true });
+  desktopApi.readAsset(desktopState.filePath, defaultAvatar.relativePath).then((src) => {
+    if (!src || !image.isConnected) { showFallback(); return; }
+    image.src = src;
+  }).catch(showFallback);
 }
 function normalizeDialogueAvatarSource(cacheKey, source) {
   if (normalizedAvatarSourceCache.has(cacheKey)) return normalizedAvatarSourceCache.get(cacheKey);
@@ -1152,16 +1183,16 @@ function syncDialogueCreationState() {
   const characters = desktopState.data?.characters || [];
   if (!characters.some((character) => character.id === newDialogueCharacterId)) newDialogueCharacterId = '';
   const selectedCharacter = characters.find((character) => character.id === newDialogueCharacterId);
-  avatar.textContent = selectedCharacter ? selectedCharacter.name.slice(0, 1) : '—';
   avatar.style.background = selectedCharacter?.color || '#ffe5da';
   avatar.style.color = selectedCharacter ? '#fff' : '#c96c56';
+  renderCharacterDefaultAvatar(avatar, selectedCharacter, 'dialogue-character-picker-avatar-image');
   label.textContent = selectedCharacter?.name || '不设置角色';
   menu.replaceChildren();
   addChild(menu, 'div', 'dialogue-character-menu-title', '新增对白角色');
   const addOption = (character) => {
     const characterId = character?.id || '';
     const option = addChild(menu, 'button', `dialogue-character-option${characterId === newDialogueCharacterId ? ' selected' : ''}`); option.type = 'button'; option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(characterId === newDialogueCharacterId));
-    const optionAvatar = addChild(option, 'span', 'dialogue-character-option-avatar', character ? character.name.slice(0, 1) : '—'); optionAvatar.style.background = character?.color || '#ffe5da'; optionAvatar.style.color = character ? '#fff' : '#c96c56';
+    const optionAvatar = addChild(option, 'span', 'dialogue-character-option-avatar'); optionAvatar.style.background = character?.color || '#ffe5da'; optionAvatar.style.color = character ? '#fff' : '#c96c56'; renderCharacterDefaultAvatar(optionAvatar, character, 'dialogue-character-option-avatar-image');
     const copy = addChild(option, 'span', 'dialogue-character-option-copy'); addChild(copy, 'b', '', character?.name || '不设置角色'); addChild(copy, 'small', '', character?.role || (character ? '未设置角色定位' : '对白中不显示头像和名称'));
     addChild(option, 'span', 'dialogue-character-option-check', characterId === newDialogueCharacterId ? '✓' : '');
     option.addEventListener('click', () => { newDialogueCharacterId = characterId; syncDialogueCreationState(); setDialogueCharacterMenuOpen(false); });
@@ -1500,6 +1531,8 @@ function renderPreviewFrame() {
 navItems.forEach((item) => item.addEventListener('click', () => {
   if (!desktopState.data) { showToast('请先创建或打开项目'); return; }
   const target = item.dataset.view;
+  relationshipResizeObserver?.disconnect();
+  relationshipResizeObserver = null;
   navItems.forEach((nav) => nav.classList.toggle('active', nav === item));
   document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor');
   views.characters.classList.toggle('hidden', target !== 'characters'); views.relationships?.classList.add('hidden'); views.assets.classList.toggle('hidden', target !== 'assets');
@@ -2114,12 +2147,19 @@ function renderRelationshipGraph() {
   const graph = ensureRelationshipGraph();
   const characters = desktopState.data.characters || [];
   if (selectedRelationshipId && !graph.relationships.some((relationship) => relationship.id === selectedRelationshipId)) selectedRelationshipId = '';
+  relationshipResizeObserver?.disconnect();
+  relationshipResizeObserver = null;
   view.replaceChildren();
   const heading = addChild(view, 'div', 'relationship-heading');
   const headingCopy = addChild(heading, 'div', 'relationship-heading-copy');
-  const backButton = addChild(headingCopy, 'button', 'relationship-back', '←'); backButton.type = 'button'; backButton.title = '返回角色与立绘';
+  const backButton = addChild(headingCopy, 'button', 'relationship-back', '×'); backButton.type = 'button'; backButton.title = '退出关系图'; backButton.setAttribute('aria-label', '退出关系图');
   const titleCopy = addChild(headingCopy, 'div'); addChild(titleCopy, 'div', 'eyebrow', 'CHARACTER RELATIONSHIP MAP'); addChild(titleCopy, 'h2', '', '角色关系图');
-  const resetLayout = addChild(heading, 'button', 'file-button', '重新布局'); resetLayout.type = 'button';
+  const headingActions = addChild(heading, 'div', 'relationship-heading-actions');
+  const zoomControls = addChild(headingActions, 'div', 'relationship-zoom-controls');
+  const zoomOut = addChild(zoomControls, 'button', 'relationship-zoom-button', '−'); zoomOut.type = 'button'; zoomOut.title = '缩小关系图'; zoomOut.setAttribute('aria-label', '缩小关系图');
+  const zoomReset = addChild(zoomControls, 'button', 'relationship-zoom-value', `${Math.round(relationshipZoom * 100)}%`); zoomReset.type = 'button'; zoomReset.title = '恢复 100%';
+  const zoomIn = addChild(zoomControls, 'button', 'relationship-zoom-button', '+'); zoomIn.type = 'button'; zoomIn.title = '放大关系图'; zoomIn.setAttribute('aria-label', '放大关系图');
+  const resetLayout = addChild(headingActions, 'button', 'file-button', '重新布局'); resetLayout.type = 'button';
   backButton.addEventListener('click', () => document.querySelector('[data-view="characters"]')?.click());
   resetLayout.addEventListener('click', () => { graph.positions = {}; selectedRelationshipId = ''; renderRelationshipGraph(); markDirty(); });
   const surface = addChild(view, 'div', 'relationship-surface');
@@ -2133,10 +2173,22 @@ function renderRelationshipGraph() {
     return;
   }
   const positions = new Map(characters.map((character, characterIndex) => [character.id, relationshipNodePosition(graph, character.id, characterIndex, characters.length)]));
+  const surfacePoint = (position) => {
+    const surfaceRect = surface.getBoundingClientRect();
+    return {
+      x: surfaceRect.width / 2 + (position.x - 0.5) * surfaceRect.width * relationshipZoom,
+      y: surfaceRect.height / 2 + (position.y - 0.5) * surfaceRect.height * relationshipZoom
+    };
+  };
   const updateNodePosition = (characterId, position) => {
     positions.set(characterId, position);
     const characterNode = nodeLayer.querySelector(`[data-character-id="${characterId}"]`);
-    if (characterNode) { characterNode.style.left = `${position.x * 100}%`; characterNode.style.top = `${position.y * 100}%`; }
+    if (characterNode) {
+      const point = surfacePoint(position);
+      characterNode.style.left = `${point.x}px`;
+      characterNode.style.top = `${point.y}px`;
+      characterNode.style.setProperty('--relationship-node-scale', relationshipZoom);
+    }
   };
   const renderEditor = () => {
     editor.replaceChildren();
@@ -2146,7 +2198,7 @@ function renderRelationshipGraph() {
     const sourceCharacter = characters.find((item) => item.id === relationship.sourceCharacterId);
     const targetCharacter = characters.find((item) => item.id === relationship.targetCharacterId);
     const names = addChild(editor, 'div', 'relationship-editor-names');
-    addChild(names, 'b', '', sourceCharacter?.name || '未知角色'); addChild(names, 'span', '', '—'); addChild(names, 'b', '', targetCharacter?.name || '未知角色');
+    addChild(names, 'b', '', sourceCharacter?.name || '未知角色'); addChild(names, 'span', '', '→'); addChild(names, 'b', '', targetCharacter?.name || '未知角色');
     const labelInput = addChild(editor, 'input', 'relationship-label-input'); labelInput.value = relationship.label; labelInput.placeholder = '关系名称';
     const colorInput = addChild(editor, 'input', 'relationship-color-input'); colorInput.type = 'color'; colorInput.value = relationship.color;
     const remove = addChild(editor, 'button', 'relationship-delete', '×'); remove.type = 'button'; remove.title = '删除关系';
@@ -2156,19 +2208,36 @@ function renderRelationshipGraph() {
   };
   const renderEdges = () => {
     edgeLayer.replaceChildren();
-    const surfaceRect = surface.getBoundingClientRect();
     graph.relationships.forEach((relationship) => {
       const sourcePosition = positions.get(relationship.sourceCharacterId);
       const targetPosition = positions.get(relationship.targetCharacterId);
       if (!sourcePosition || !targetPosition) return;
-      const sourceX = sourcePosition.x * surfaceRect.width; const sourceY = sourcePosition.y * surfaceRect.height;
-      const targetX = targetPosition.x * surfaceRect.width; const targetY = targetPosition.y * surfaceRect.height;
-      const distance = Math.hypot(targetX - sourceX, targetY - sourceY);
+      const sourceCenter = surfacePoint(sourcePosition);
+      const targetCenter = surfacePoint(targetPosition);
+      const centerDeltaX = targetCenter.x - sourceCenter.x;
+      const centerDeltaY = targetCenter.y - sourceCenter.y;
+      const centerDistance = Math.hypot(centerDeltaX, centerDeltaY);
+      if (centerDistance < 1) return;
+      const directionX = centerDeltaX / centerDistance;
+      const directionY = centerDeltaY / centerDistance;
+      const reciprocal = graph.relationships.some((item) => item.sourceCharacterId === relationship.targetCharacterId && item.targetCharacterId === relationship.sourceCharacterId);
+      const perpendicularOffset = reciprocal ? 9 * relationshipZoom : 0;
+      const offsetX = -directionY * perpendicularOffset;
+      const offsetY = directionX * perpendicularOffset;
+      const nodeHalfWidth = 86 * relationshipZoom;
+      const nodeHalfHeight = 33 * relationshipZoom;
+      const nodeInset = 1 / Math.max(Math.abs(directionX) / nodeHalfWidth, Math.abs(directionY) / nodeHalfHeight);
+      if (centerDistance <= nodeInset * 2 + 8) return;
+      const sourceX = sourceCenter.x + directionX * nodeInset + offsetX;
+      const sourceY = sourceCenter.y + directionY * nodeInset + offsetY;
+      const targetX = targetCenter.x - directionX * nodeInset + offsetX;
+      const targetY = targetCenter.y - directionY * nodeInset + offsetY;
+      const distance = Math.max(0, Math.hypot(targetX - sourceX, targetY - sourceY));
       const angle = Math.atan2(targetY - sourceY, targetX - sourceX) * 180 / Math.PI;
       const line = addChild(edgeLayer, 'button', `relationship-edge${selectedRelationshipId === relationship.id ? ' selected' : ''}`); line.type = 'button'; line.title = relationship.label;
       line.style.left = `${sourceX}px`; line.style.top = `${sourceY}px`; line.style.width = `${distance}px`; line.style.transform = `translateY(-50%) rotate(${angle}deg)`; line.style.setProperty('--relationship-color', relationship.color);
       line.addEventListener('click', () => { selectedRelationshipId = relationship.id; renderEdges(); });
-      const label = addChild(edgeLayer, 'button', `relationship-edge-label${selectedRelationshipId === relationship.id ? ' selected' : ''}`, relationship.label); label.type = 'button'; label.style.left = `${(sourceX + targetX) / 2}px`; label.style.top = `${(sourceY + targetY) / 2}px`; label.style.setProperty('--relationship-color', relationship.color);
+      const label = addChild(edgeLayer, 'button', `relationship-edge-label${selectedRelationshipId === relationship.id ? ' selected' : ''}`, relationship.label); label.type = 'button'; label.style.left = `${(sourceX + targetX) / 2}px`; label.style.top = `${(sourceY + targetY) / 2}px`; label.style.setProperty('--relationship-color', relationship.color); label.style.setProperty('--relationship-label-scale', relationshipZoom);
       label.addEventListener('click', () => { selectedRelationshipId = relationship.id; renderEdges(); });
     });
     renderEditor();
@@ -2178,7 +2247,7 @@ function renderRelationshipGraph() {
     const sourcePosition = positions.get(sourceCharacterId); const surfaceRect = surface.getBoundingClientRect();
     const previewLine = addChild(edgeLayer, 'div', 'relationship-edge-preview');
     const updatePreview = (pointerEvent) => {
-      const sourceX = sourcePosition.x * surfaceRect.width; const sourceY = sourcePosition.y * surfaceRect.height;
+      const sourcePoint = surfacePoint(sourcePosition); const sourceX = sourcePoint.x; const sourceY = sourcePoint.y;
       const targetX = Math.max(0, Math.min(surfaceRect.width, pointerEvent.clientX - surfaceRect.left)); const targetY = Math.max(0, Math.min(surfaceRect.height, pointerEvent.clientY - surfaceRect.top));
       previewLine.style.left = `${sourceX}px`; previewLine.style.top = `${sourceY}px`; previewLine.style.width = `${Math.hypot(targetX - sourceX, targetY - sourceY)}px`; previewLine.style.transform = `translateY(-50%) rotate(${Math.atan2(targetY - sourceY, targetX - sourceX) * 180 / Math.PI}deg)`;
     };
@@ -2187,7 +2256,7 @@ function renderRelationshipGraph() {
       const targetNode = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY)?.closest('.relationship-node');
       const targetCharacterId = targetNode?.dataset.characterId;
       if (!targetCharacterId || targetCharacterId === sourceCharacterId) return;
-      const existing = graph.relationships.find((item) => (item.sourceCharacterId === sourceCharacterId && item.targetCharacterId === targetCharacterId) || (item.sourceCharacterId === targetCharacterId && item.targetCharacterId === sourceCharacterId));
+      const existing = graph.relationships.find((item) => item.sourceCharacterId === sourceCharacterId && item.targetCharacterId === targetCharacterId);
       if (existing) selectedRelationshipId = existing.id;
       else {
         const relationship = { id: `relationship-${Date.now()}`, sourceCharacterId, targetCharacterId, label: '关系', color: '#f2674f' };
@@ -2199,10 +2268,9 @@ function renderRelationshipGraph() {
   };
   characters.forEach((character, characterIndex) => {
     const position = positions.get(character.id);
-    const characterNode = addChild(nodeLayer, 'article', 'relationship-node'); characterNode.dataset.characterId = character.id; characterNode.style.left = `${position.x * 100}%`; characterNode.style.top = `${position.y * 100}%`; characterNode.style.setProperty('--character-color', character.color || '#f2674f');
-    const avatar = addChild(characterNode, 'div', 'relationship-node-avatar', character.name.slice(0, 1));
-    const defaultAvatar = characterDefaultMedia(character, 'avatarGroup');
-    if (defaultAvatar) { const image = addChild(avatar, 'img'); image.alt = character.name; loadProjectImage(defaultAvatar.relativePath, image, avatar); }
+    const characterNode = addChild(nodeLayer, 'article', 'relationship-node'); characterNode.dataset.characterId = character.id; characterNode.style.setProperty('--character-color', character.color || '#f2674f');
+    const avatar = addChild(characterNode, 'div', 'relationship-node-avatar');
+    renderCharacterDefaultAvatar(avatar, character, 'relationship-node-avatar-image');
     const copy = addChild(characterNode, 'div', 'relationship-node-copy'); addChild(copy, 'b', '', character.name); addChild(copy, 'small', '', character.role || '未设置定位');
     const connector = addChild(characterNode, 'button', 'relationship-node-connector'); connector.type = 'button'; connector.title = '拖动创建关系'; connector.setAttribute('aria-label', `从${character.name}创建关系`);
     connector.addEventListener('pointerdown', (event) => startRelationship(event, character.id));
@@ -2213,14 +2281,34 @@ function renderRelationshipGraph() {
       const startPosition = positions.get(character.id); const startX = event.clientX; const startY = event.clientY;
       characterNode.setPointerCapture(event.pointerId);
       const moveNode = (pointerEvent) => {
-        const nextPosition = { x: Math.min(0.92, Math.max(0.08, startPosition.x + (pointerEvent.clientX - startX) / surfaceRect.width)), y: Math.min(0.88, Math.max(0.12, startPosition.y + (pointerEvent.clientY - startY) / surfaceRect.height)) };
+        const nextPosition = { x: Math.min(0.92, Math.max(0.08, startPosition.x + (pointerEvent.clientX - startX) / (surfaceRect.width * relationshipZoom))), y: Math.min(0.88, Math.max(0.12, startPosition.y + (pointerEvent.clientY - startY) / (surfaceRect.height * relationshipZoom))) };
         updateNodePosition(character.id, nextPosition); renderEdges();
       };
       const stopNode = (pointerEvent) => { characterNode.removeEventListener('pointermove', moveNode); characterNode.removeEventListener('pointerup', stopNode); if (characterNode.hasPointerCapture(pointerEvent.pointerId)) characterNode.releasePointerCapture(pointerEvent.pointerId); graph.positions[character.id] = positions.get(character.id); markDirty(); };
       characterNode.addEventListener('pointermove', moveNode); characterNode.addEventListener('pointerup', stopNode);
     });
+    updateNodePosition(character.id, position);
   });
-  requestAnimationFrame(renderEdges);
+  const applyRelationshipZoom = (value, persist = true) => {
+    relationshipZoom = clampRelationshipZoom(value);
+    if (persist) localStorage.setItem(RELATIONSHIP_ZOOM_STORAGE_KEY, String(relationshipZoom));
+    zoomReset.textContent = `${Math.round(relationshipZoom * 100)}%`;
+    zoomOut.disabled = relationshipZoom <= MIN_RELATIONSHIP_ZOOM;
+    zoomIn.disabled = relationshipZoom >= MAX_RELATIONSHIP_ZOOM;
+    surface.style.setProperty('--relationship-grid-size', `${28 * relationshipZoom}px`);
+    positions.forEach((position, characterId) => updateNodePosition(characterId, position));
+    renderEdges();
+  };
+  zoomOut.addEventListener('click', () => applyRelationshipZoom(relationshipZoom - 0.1));
+  zoomReset.addEventListener('click', () => applyRelationshipZoom(1));
+  zoomIn.addEventListener('click', () => applyRelationshipZoom(relationshipZoom + 0.1));
+  surface.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    applyRelationshipZoom(relationshipZoom + (event.deltaY < 0 ? 0.1 : -0.1));
+  }, { passive: false });
+  relationshipResizeObserver = new ResizeObserver(() => applyRelationshipZoom(relationshipZoom, false));
+  relationshipResizeObserver.observe(surface);
+  applyRelationshipZoom(relationshipZoom, false);
 }
 function renderCharacters() {
   const view = document.getElementById('charactersView');
