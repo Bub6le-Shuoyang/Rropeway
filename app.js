@@ -1,7 +1,7 @@
 const desktopApi = window.scriptroom;
 desktopApi?.getVersion?.().then((version) => { const label = document.getElementById('appVersion'); if (label) label.textContent = `v${version}`; }).catch(() => {});
 const navItems = document.querySelectorAll('.nav-item');
-const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), assets: document.getElementById('assetsView'), home: document.getElementById('projectHomeView') };
+const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), relationships: document.getElementById('relationshipsView'), assets: document.getElementById('assetsView'), home: document.getElementById('projectHomeView') };
 const toast = document.getElementById('toast');
 let desktopState = { filePath: null, data: null, dirty: false };
 const LAST_PROJECT_STORAGE_KEY = 'scriptroom-last-project';
@@ -20,6 +20,10 @@ let newDialogueCharacterId = '';
 let savedTextRange = null;
 let savedTextBlockIndex = null;
 let segmentSlideshowTimers = new Set();
+let previewState = null;
+let previewRenderToken = 0;
+let selectedRelationshipId = '';
+const normalizedAvatarSourceCache = new Map();
 const expandedChapterIds = new Set();
 let draggedChapterId = null;
 let draggedSceneInfo = null;
@@ -238,12 +242,286 @@ function requestCharacterForm(existing = null) {
     confirm.addEventListener('click', () => {
       const name = nameInput.value.trim();
       if (!name) { nameInput.focus(); nameInput.classList.add('invalid'); return; }
-      close({ ...value, name, role: roleInput.value.trim(), description: descriptionInput.value.trim(), color: colorInput.value, portraitPreset: selectedPreset === 'none' ? null : selectedPreset, portraits: Array.isArray(value.portraits) ? value.portraits : [] });
+      close({ ...value, name, role: roleInput.value.trim(), description: descriptionInput.value.trim(), color: colorInput.value, portraitPreset: selectedPreset === 'none' ? null : selectedPreset, avatarGroup: Array.isArray(value.avatarGroup) ? value.avatarGroup : [], portraitGroup: Array.isArray(value.portraitGroup) ? value.portraitGroup : [], defaultAvatarId: value.defaultAvatarId || '', defaultPortraitId: value.defaultPortraitId || '' });
     });
     overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
     document.body.appendChild(overlay);
     requestAnimationFrame(() => nameInput.focus());
   });
+}
+function characterMediaOriginalName(item) { return String(item?.originalName || item?.name || '未命名表情'); }
+function characterMediaDisplayName(item) { return String(item?.alias || '').trim() || characterMediaOriginalName(item); }
+function characterMediaGroup(character, groupName) {
+  const items = Array.isArray(character?.[groupName]) ? character[groupName] : [];
+  const defaultId = groupName === 'avatarGroup' ? character?.defaultAvatarId : character?.defaultPortraitId;
+  if (!defaultId) return [...items];
+  return [...items].sort((left, right) => Number(right.id === defaultId) - Number(left.id === defaultId));
+}
+function characterDefaultMedia(character, groupName) {
+  const items = characterMediaGroup(character, groupName);
+  const defaultId = groupName === 'avatarGroup' ? character?.defaultAvatarId : character?.defaultPortraitId;
+  return items.find((item) => item.id === defaultId) || items[0] || null;
+}
+function loadProjectImage(relativePath, image, container = image) {
+  if (!desktopState.filePath || !relativePath || !image) return;
+  desktopApi.readAsset(desktopState.filePath, relativePath).then((src) => { if (src && image.isConnected) image.src = src; }).catch(() => container?.classList.add('asset-missing'));
+}
+function normalizeDialogueAvatarSource(cacheKey, source) {
+  if (normalizedAvatarSourceCache.has(cacheKey)) return normalizedAvatarSourceCache.get(cacheKey);
+  const normalization = new Promise((resolve) => {
+    const sourceImage = new Image();
+    sourceImage.onload = () => {
+      const sampleSize = 192;
+      const sampleCanvas = document.createElement('canvas'); sampleCanvas.width = sampleSize; sampleCanvas.height = sampleSize;
+      const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true });
+      sampleContext.drawImage(sourceImage, 0, 0, sampleSize, sampleSize);
+      const pixels = sampleContext.getImageData(0, 0, sampleSize, sampleSize).data;
+      let minimumX = sampleSize; let minimumY = sampleSize; let maximumX = -1; let maximumY = -1;
+      for (let pixelIndex = 0; pixelIndex < sampleSize * sampleSize; pixelIndex += 1) {
+        if (pixels[pixelIndex * 4 + 3] <= 12) continue;
+        const pixelX = pixelIndex % sampleSize;
+        const pixelY = Math.floor(pixelIndex / sampleSize);
+        minimumX = Math.min(minimumX, pixelX); minimumY = Math.min(minimumY, pixelY);
+        maximumX = Math.max(maximumX, pixelX); maximumY = Math.max(maximumY, pixelY);
+      }
+      if (maximumX < minimumX || (minimumX <= 2 && minimumY <= 2 && maximumX >= sampleSize - 3 && maximumY >= sampleSize - 3)) { resolve(source); return; }
+      const scaleX = sourceImage.naturalWidth / sampleSize;
+      const scaleY = sourceImage.naturalHeight / sampleSize;
+      const contentWidth = (maximumX - minimumX + 1) * scaleX;
+      const contentHeight = (maximumY - minimumY + 1) * scaleY;
+      const padding = Math.max(contentWidth, contentHeight) * 0.02;
+      const sourceX = Math.max(0, minimumX * scaleX - padding);
+      const sourceY = Math.max(0, minimumY * scaleY - padding);
+      const sourceWidth = Math.min(sourceImage.naturalWidth - sourceX, contentWidth + padding * 2);
+      const sourceHeight = Math.min(sourceImage.naturalHeight - sourceY, contentHeight + padding * 2);
+      const outputCanvas = document.createElement('canvas'); outputCanvas.width = 512; outputCanvas.height = 512;
+      const outputContext = outputCanvas.getContext('2d');
+      const outputScale = Math.max(500 / sourceWidth, 500 / sourceHeight);
+      const outputWidth = sourceWidth * outputScale;
+      const outputHeight = sourceHeight * outputScale;
+      outputContext.drawImage(sourceImage, sourceX, sourceY, sourceWidth, sourceHeight, (512 - outputWidth) / 2, (512 - outputHeight) / 2, outputWidth, outputHeight);
+      resolve(outputCanvas.toDataURL('image/png'));
+    };
+    sourceImage.onerror = () => resolve(source);
+    sourceImage.src = source;
+  });
+  normalizedAvatarSourceCache.set(cacheKey, normalization);
+  return normalization;
+}
+async function openPortraitAvatarCrop(characterId, portrait, onCreated) {
+  const character = desktopState.data?.characters?.find((item) => item.id === characterId);
+  if (!character || !portrait?.relativePath || !desktopState.filePath) return;
+  let source;
+  try { source = await desktopApi.readAsset(desktopState.filePath, portrait.relativePath); }
+  catch (error) { showToast(error.message || '无法读取立绘'); return; }
+  if (!source) { showToast('无法读取立绘'); return; }
+  const sourceImage = new Image();
+  try { await new Promise((resolve, reject) => { sourceImage.onload = resolve; sourceImage.onerror = reject; sourceImage.src = source; }); }
+  catch { showToast('立绘图片加载失败'); return; }
+
+  const overlay = node('div', 'editor-dialog-overlay character-crop-overlay');
+  const dialog = addChild(overlay, 'div', 'editor-dialog character-crop-dialog');
+  const heading = addChild(dialog, 'div', 'character-crop-heading');
+  const headingCopy = addChild(heading, 'div');
+  addChild(headingCopy, 'h3', '', '从立绘生成头像');
+  addChild(headingCopy, 'p', '', `${character.name} · ${characterMediaDisplayName(portrait)}`);
+  const closeButton = addChild(heading, 'button', 'character-media-close', '×'); closeButton.type = 'button'; closeButton.title = '关闭';
+  const content = addChild(dialog, 'div', 'character-crop-content');
+  const stage = addChild(content, 'div', 'character-crop-stage');
+  const canvas = addChild(stage, 'canvas', 'character-crop-canvas'); canvas.width = 512; canvas.height = 512;
+  addChild(stage, 'span', 'character-crop-hint', '拖动画面调整头像区域');
+  const controls = addChild(content, 'div', 'character-crop-controls');
+  const nameLabel = addChild(controls, 'label', 'character-crop-field'); addChild(nameLabel, 'span', '', '头像名称');
+  const nameInput = addChild(nameLabel, 'input', 'editor-dialog-input'); nameInput.value = `${characterMediaDisplayName(portrait)} 头像`;
+  const zoomLabel = addChild(controls, 'label', 'character-crop-field'); addChild(zoomLabel, 'span', '', '画面缩放');
+  const zoomRow = addChild(zoomLabel, 'div', 'character-crop-zoom');
+  const zoomInput = addChild(zoomRow, 'input'); zoomInput.type = 'range'; zoomInput.min = '1'; zoomInput.max = '3'; zoomInput.step = '0.01'; zoomInput.value = '1';
+  const zoomValue = addChild(zoomRow, 'output', '', '100%');
+  const actionRow = addChild(controls, 'div', 'character-crop-actions');
+  const resetButton = addChild(actionRow, 'button', 'file-button', '重置位置'); resetButton.type = 'button';
+  const saveButton = addChild(actionRow, 'button', 'file-button save', '生成头像'); saveButton.type = 'button';
+
+  const context = canvas.getContext('2d');
+  const cropState = { zoom: 1, offsetX: 0, offsetY: 0, dragging: false, pointerX: 0, pointerY: 0 };
+  const baseScale = Math.max(canvas.width / sourceImage.naturalWidth, canvas.height / sourceImage.naturalHeight);
+  const dimensions = () => ({ width: sourceImage.naturalWidth * baseScale * cropState.zoom, height: sourceImage.naturalHeight * baseScale * cropState.zoom });
+  const clampOffsets = () => {
+    const size = dimensions();
+    cropState.offsetX = Math.max((canvas.width - size.width) / 2, Math.min((size.width - canvas.width) / 2, cropState.offsetX));
+    cropState.offsetY = Math.max((canvas.height - size.height) / 2, Math.min((size.height - canvas.height) / 2, cropState.offsetY));
+  };
+  const draw = () => {
+    clampOffsets();
+    const size = dimensions();
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(sourceImage, (canvas.width - size.width) / 2 + cropState.offsetX, (canvas.height - size.height) / 2 + cropState.offsetY, size.width, size.height);
+  };
+  const resetCrop = () => {
+    cropState.zoom = 1;
+    cropState.offsetX = 0;
+    const size = dimensions();
+    cropState.offsetY = Math.max(0, (size.height - canvas.height) / 2);
+    zoomInput.value = '1';
+    zoomValue.textContent = '100%';
+    draw();
+  };
+  const updateZoom = (nextZoom) => {
+    cropState.zoom = Math.max(1, Math.min(3, nextZoom));
+    zoomInput.value = String(cropState.zoom);
+    zoomValue.textContent = `${Math.round(cropState.zoom * 100)}%`;
+    draw();
+  };
+  canvas.addEventListener('pointerdown', (event) => { cropState.dragging = true; cropState.pointerX = event.clientX; cropState.pointerY = event.clientY; canvas.setPointerCapture(event.pointerId); });
+  canvas.addEventListener('pointermove', (event) => {
+    if (!cropState.dragging) return;
+    const ratio = canvas.width / canvas.getBoundingClientRect().width;
+    cropState.offsetX += (event.clientX - cropState.pointerX) * ratio;
+    cropState.offsetY += (event.clientY - cropState.pointerY) * ratio;
+    cropState.pointerX = event.clientX;
+    cropState.pointerY = event.clientY;
+    draw();
+  });
+  const stopDragging = (event) => { cropState.dragging = false; if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId); };
+  canvas.addEventListener('pointerup', stopDragging);
+  canvas.addEventListener('pointercancel', stopDragging);
+  canvas.addEventListener('wheel', (event) => { event.preventDefault(); updateZoom(cropState.zoom + (event.deltaY < 0 ? 0.08 : -0.08)); }, { passive: false });
+  zoomInput.addEventListener('input', () => updateZoom(Number(zoomInput.value)));
+  resetButton.addEventListener('click', resetCrop);
+  const close = () => overlay.remove();
+  closeButton.addEventListener('click', close);
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+  saveButton.addEventListener('click', async () => {
+    const name = nameInput.value.trim() || `${characterMediaDisplayName(portrait)} 头像`;
+    saveButton.disabled = true;
+    saveButton.textContent = '正在生成…';
+    try {
+      const avatar = await desktopApi.saveCroppedAvatar(desktopState.filePath, character.id, { name, dataUrl: canvas.toDataURL('image/png') });
+      const liveCharacter = desktopState.data.characters.find((item) => item.id === character.id);
+      liveCharacter.avatarGroup ||= [];
+      liveCharacter.avatarGroup.push(avatar);
+      if (!liveCharacter.defaultAvatarId) liveCharacter.defaultAvatarId = avatar.id;
+      close();
+      onCreated?.(avatar);
+      markDirty();
+      showToast('头像已生成并加入头像组');
+    } catch (error) {
+      saveButton.disabled = false;
+      saveButton.textContent = '生成头像';
+      showToast(error.message || '头像生成失败');
+    }
+  });
+  document.body.appendChild(overlay);
+  resetCrop();
+}
+function openCharacterMediaManager(characterId) {
+  const overlay = node('div', 'editor-dialog-overlay');
+  const dialog = addChild(overlay, 'div', 'editor-dialog character-media-dialog');
+  const heading = addChild(dialog, 'div', 'character-media-heading');
+  const headingCopy = addChild(heading, 'div');
+  const title = addChild(headingCopy, 'h3');
+  const pathHint = addChild(headingCopy, 'p', 'character-media-path');
+  const closeButton = addChild(heading, 'button', 'character-media-close', '×'); closeButton.type = 'button'; closeButton.title = '关闭';
+  const body = addChild(dialog, 'div', 'character-media-body');
+  const close = () => { overlay.remove(); renderCharacters(); renderScene(); renderInspector(); };
+  const renderManager = () => {
+    const character = desktopState.data?.characters?.find((item) => item.id === characterId);
+    if (!character) { close(); return; }
+    title.textContent = `${character.name} · 表情素材`;
+    pathHint.textContent = `assets/characters/${character.id}/`;
+    body.replaceChildren();
+    const renderGroup = (groupName, folderName, label, description, square) => {
+      const section = addChild(body, 'section', 'character-media-section');
+      const sectionHeading = addChild(section, 'div', 'character-media-section-heading');
+      const copy = addChild(sectionHeading, 'div'); addChild(copy, 'h4', '', label); addChild(copy, 'p', '', description);
+      const importButton = addChild(sectionHeading, 'button', 'file-button save', `＋ 导入${label}`); importButton.type = 'button';
+      const items = characterMediaGroup(character, groupName);
+      const grid = addChild(section, 'div', `character-media-grid${square ? ' avatar-grid' : ' portrait-grid'}`);
+      const defaultProperty = groupName === 'avatarGroup' ? 'defaultAvatarId' : 'defaultPortraitId';
+      const updateDefaultIndicators = () => {
+        const liveCharacter = desktopState.data?.characters?.find((entry) => entry.id === character.id);
+        let defaultCard = null;
+        grid.querySelectorAll('.character-media-item').forEach((mediaCard) => {
+          const selected = mediaCard.dataset.mediaId === liveCharacter?.[defaultProperty];
+          if (selected) defaultCard = mediaCard;
+          mediaCard.classList.toggle('default', selected);
+          const preview = mediaCard.querySelector('.character-media-preview');
+          let mark = preview.querySelector('.character-media-default-mark');
+          if (selected && !mark) mark = addChild(preview, 'span', 'character-media-default-mark', '默认');
+          if (!selected) mark?.remove();
+          const button = mediaCard.querySelector('[data-default-action]');
+          if (button) { button.disabled = selected; button.textContent = selected ? '当前默认' : '设为默认'; }
+        });
+        if (defaultCard && grid.firstElementChild !== defaultCard) grid.prepend(defaultCard);
+      };
+      items.forEach((item, itemIndex) => {
+        const card = addChild(grid, 'article', 'character-media-item'); card.dataset.mediaId = item.id;
+        const preview = addChild(card, 'div', `character-media-preview${square ? ' square' : ' standing'}`);
+        const image = addChild(preview, 'img'); image.alt = characterMediaDisplayName(item); loadProjectImage(item.relativePath, image, preview);
+        const originalName = addChild(card, 'div', 'character-media-original-name', characterMediaOriginalName(item)); originalName.title = characterMediaOriginalName(item);
+        const nameInput = addChild(card, 'input', 'character-media-name'); nameInput.value = item.alias || ''; nameInput.placeholder = '添加别名'; nameInput.title = item.alias || '未设置别名';
+        nameInput.addEventListener('change', () => {
+          const liveCharacter = desktopState.data?.characters?.find((entry) => entry.id === character.id);
+          const liveItem = characterMediaGroup(liveCharacter, groupName).find((media) => media.id === item.id);
+          if (!liveItem) return;
+          liveItem.alias = nameInput.value.trim();
+          nameInput.value = liveItem.alias;
+          nameInput.title = liveItem.alias || '未设置别名';
+          image.alt = characterMediaDisplayName(liveItem);
+          markDirty();
+        });
+        const actions = addChild(card, 'div', 'character-media-actions');
+        const makeDefault = addChild(actions, 'button', 'character-media-action', '设为默认'); makeDefault.type = 'button'; makeDefault.dataset.defaultAction = 'true';
+        makeDefault.addEventListener('click', () => {
+          const liveCharacter = desktopState.data?.characters?.find((entry) => entry.id === character.id);
+          if (!liveCharacter || liveCharacter[defaultProperty] === item.id) return;
+          liveCharacter[defaultProperty] = item.id;
+          updateDefaultIndicators();
+          markDirty();
+        });
+        if (!square) {
+          const cropAvatar = addChild(actions, 'button', 'character-media-action crop-avatar', '裁为头像'); cropAvatar.type = 'button';
+          cropAvatar.addEventListener('click', () => openPortraitAvatarCrop(character.id, item, renderManager));
+        }
+        const locate = addChild(actions, 'button', 'character-media-action', '源文件地址'); locate.type = 'button'; locate.addEventListener('click', () => desktopApi.showItem(desktopState.filePath, item.relativePath));
+        const remove = addChild(actions, 'button', 'character-media-action danger', '删除'); remove.type = 'button';
+        remove.addEventListener('click', async () => {
+          if (!(await requestDeleteConfirmation(`确定删除表情素材“${characterMediaDisplayName(item)}”吗？项目中的对应引用会一并清理。`))) return;
+          try {
+            await desktopApi.deleteAsset(desktopState.filePath, item.relativePath);
+            removeAssetReferences(item.relativePath);
+            const liveCharacter = desktopState.data?.characters?.find((entry) => entry.id === character.id);
+            if (!liveCharacter) return;
+            const group = characterMediaGroup(liveCharacter, groupName);
+            liveCharacter[groupName] = group.filter((media) => media.id !== item.id);
+            if (groupName === 'avatarGroup' && liveCharacter.defaultAvatarId === item.id) liveCharacter.defaultAvatarId = liveCharacter.avatarGroup[0]?.id || '';
+            if (groupName === 'portraitGroup' && liveCharacter.defaultPortraitId === item.id) liveCharacter.defaultPortraitId = liveCharacter.portraitGroup[0]?.id || '';
+            renderManager(); markDirty(); showToast('角色表情素材已删除');
+          } catch (error) { showToast(error.message || '删除失败'); }
+        });
+      });
+      updateDefaultIndicators();
+      if (!items.length) addChild(grid, 'div', 'character-media-empty', `尚未导入${label}`);
+      importButton.addEventListener('click', async () => {
+        if (!desktopState.filePath && !(await saveProject())) return;
+        try {
+          const imported = await desktopApi.importCharacterMedia(desktopState.filePath, character.id, folderName);
+          if (!imported.length) return;
+          const liveCharacter = desktopState.data.characters.find((item) => item.id === character.id);
+          liveCharacter[groupName] ||= [];
+          liveCharacter[groupName].push(...imported);
+          if (groupName === 'avatarGroup' && !liveCharacter.defaultAvatarId) liveCharacter.defaultAvatarId = imported[0].id;
+          if (groupName === 'portraitGroup' && !liveCharacter.defaultPortraitId) liveCharacter.defaultPortraitId = imported[0].id;
+          renderManager(); markDirty(); showToast(`已导入 ${imported.length} 个${label}表情`);
+        } catch (error) { showToast(error.message || '角色素材导入失败'); }
+      });
+    };
+    renderGroup('avatarGroup', 'avatars', '头像组', '正方形头像，可拆分普通、开心、生气等表情。', true);
+    renderGroup('portraitGroup', 'portraits', '立绘组', '完整立绘，可为不同表情分别导入独立图片。', false);
+  };
+  closeButton.addEventListener('click', close);
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+  document.body.appendChild(overlay);
+  renderManager();
 }
 function captureBlocks() {
   return [...document.querySelectorAll('.script-canvas .script-block')].map((block) => {
@@ -259,7 +537,7 @@ function captureBlocks() {
       return { id: block.dataset.blockId, type: 'choice', title: block.querySelector('.choice-title')?.textContent.trim() || '', options };
     }
     const paragraph = block.querySelector('.block-content p');
-    return { id: block.dataset.blockId, type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: richTextPlainText(paragraph), textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^(?:创作备注|注)：/, '').trim() || '', portrait: block.dataset.portrait || undefined };
+    return { id: block.dataset.blockId, type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: richTextPlainText(paragraph), textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^(?:创作备注|注)：/, '').trim() || '', avatar: block.dataset.avatar || undefined, portrait: block.dataset.portrait || undefined };
   });
 }
 
@@ -562,7 +840,18 @@ function createBlockElement(block, index) {
     if (!hasCharacter) wrapper.classList.add('unassigned-dialogue');
     const meta = addChild(content, 'div', 'dialogue-meta');
     if (hasCharacter) {
-      const thumb = addChild(meta, 'div', 'character-thumb', (block.character || character?.name || '').slice(0, 1)); thumb.style.background = block.characterColor || character?.color || '#f2674f';
+      const avatarPath = block.avatar || characterDefaultMedia(character, 'avatarGroup')?.relativePath || '';
+      const thumb = addChild(wrapper, 'div', 'character-thumb dialogue-avatar', (block.character || character?.name || '').slice(0, 1)); thumb.style.background = block.characterColor || character?.color || '#f2674f'; thumb.style.setProperty('--character-color', block.characterColor || character?.color || '#f2674f');
+      if (avatarPath && desktopState.filePath) desktopApi.readAsset(desktopState.filePath, avatarPath).then(async (src) => {
+        if (!src || !thumb.isConnected) return;
+        const normalizedSource = await normalizeDialogueAvatarSource(avatarPath, src);
+        if (!thumb.isConnected) return;
+        thumb.textContent = '';
+        thumb.classList.add('has-avatar-image');
+        const avatarImage = addChild(thumb, 'img', 'dialogue-avatar-image');
+        avatarImage.alt = `${block.character || character?.name || '角色'}头像`;
+        avatarImage.src = normalizedSource;
+      }).catch(() => thumb.classList.add('asset-missing'));
       const nameNode = addChild(meta, 'span', 'character-name', block.character || character?.name || ''); nameNode.style.color = block.characterColor || character?.color || '#f2674f';
     } else addChild(meta, 'span', 'unassigned-character-hint', '未设置角色');
     if (isPerspective) addChild(meta, 'span', 'pov-pill', '主视角'); orderedStatusTags(block.statusTags).forEach((statusTag) => addChild(meta, 'span', `status-pill${statusTag === '关键节点' ? ' critical-node-tag' : ''}`, statusTag)); addChild(meta, 'span', 'voice-pill', `♪ ${block.voice || '未设定'}`);
@@ -570,7 +859,7 @@ function createBlockElement(block, index) {
     if (block.textHtml) paragraph.innerHTML = sanitizeRichTextHtml(block.textHtml); else paragraph.textContent = block.text || '';
     paragraph.style.textAlign = block.textAlign || 'left';
     if (block.note) addChild(content, 'div', 'block-note', `创作备注：${block.note}`);
-    if (block.portrait) wrapper.dataset.portrait = block.portrait; if (block.portraitPreset) wrapper.dataset.portraitPreset = block.portraitPreset; if (block.characterId || character?.id) wrapper.dataset.characterId = block.characterId || character.id; wrapper.dataset.characterColor = block.characterColor || character?.color || '#b8bcb8';
+    if (block.avatar) wrapper.dataset.avatar = block.avatar; if (block.portrait) wrapper.dataset.portrait = block.portrait; if (block.portraitPreset) wrapper.dataset.portraitPreset = block.portraitPreset; if (block.characterId || character?.id) wrapper.dataset.characterId = block.characterId || character.id; wrapper.dataset.characterColor = block.characterColor || character?.color || '#b8bcb8';
   }
   wrapper.appendChild(content);
   wrapper.querySelectorAll('p').forEach((paragraph) => { paragraph.contentEditable = 'true'; });
@@ -923,7 +1212,7 @@ async function saveProject(options = {}) {
       setProjectLocationStatus('本地项目');
       rememberProject(result.filePath, result.data.title);
       if (editRevision === revisionAtStart) {
-        desktopState.data = result.data;
+        if (!desktopState.data) desktopState.data = result.data;
         desktopState.dirty = false;
         desktopApi.setDirty(false);
         localStorage.removeItem('scriptroom-draft');
@@ -992,33 +1281,220 @@ async function createProjectFromHome(event) {
 async function openProject() { if (desktopState.data && !(await prepareProjectSwitch('当前项目有未保存修改，确定打开另一个项目吗？'))) return; try { const result = await desktopApi.openProject(); if (result) { applyProject(result.data, result.filePath); showToast('项目已打开'); } } catch (error) { showToast(error.message || '打开失败'); } }
 async function newProject() { if (desktopState.data && !(await prepareProjectSwitch('当前项目有未保存修改，确定新建项目吗？'))) return; showProjectHome(true); document.getElementById('projectCreateName')?.focus(); }
 async function importAssets() { if (!desktopState.filePath) { if (!(await saveProject())) return; } try { const assets = await desktopApi.importAssets(desktopState.filePath); if (!assets.length) return; desktopState.data.assets.push(...assets); renderImportedAssets(); markDirty(); showToast(`已导入 ${assets.length} 个素材`); } catch (error) { showToast(error.message || '素材导入失败'); } }
-function updatePreview() {
+function previewSceneData() { return desktopState.data?.chapters?.[previewState?.chapterIndex]?.scenes?.[previewState?.sceneIndex] || null; }
+function previewBlockData() { return previewSceneData()?.blocks?.[previewState?.blockIndex] || null; }
+function previewPerspectiveCharacterId(scene, blockIndex) {
+  for (let index = blockIndex; index >= 0; index -= 1) {
+    if (scene.blocks[index]?.type === 'segment') return scene.blocks[index].perspectiveCharacterId || '';
+  }
+  return '';
+}
+
+function createCharacterMediaSearchPicker(parent, items, currentPath, onChange) {
+  const picker = addChild(parent, 'div', 'character-media-picker');
+  const input = addChild(picker, 'input', 'select-control character-media-picker-input');
+  input.placeholder = items.length ? '按头像原名搜索' : '当前角色没有头像';
+  input.disabled = !items.length;
+  const panel = addChild(picker, 'div', 'character-media-picker-panel'); panel.hidden = true;
+  let selectedPath = currentPath || '';
+  let visibleItems = [...items];
+  const selectedItem = () => items.find((item) => item.relativePath === selectedPath);
+  const syncInput = () => { input.value = selectedItem() ? characterMediaOriginalName(selectedItem()) : ''; };
+  const choose = (item) => {
+    selectedPath = item?.relativePath || '';
+    syncInput();
+    panel.hidden = true;
+    onChange(selectedPath);
+  };
+  const renderOptions = (query = '') => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    visibleItems = items.filter((item) => {
+      if (!normalizedQuery) return true;
+      return characterMediaOriginalName(item).toLocaleLowerCase().includes(normalizedQuery) || String(item.alias || '').toLocaleLowerCase().includes(normalizedQuery);
+    });
+    panel.replaceChildren();
+    const none = addChild(panel, 'button', `character-media-picker-option${selectedPath ? '' : ' selected'}`); none.type = 'button';
+    addChild(none, 'span', 'character-media-picker-empty', '不使用头像');
+    none.addEventListener('mousedown', (event) => event.preventDefault());
+    none.addEventListener('click', () => choose(null));
+    visibleItems.forEach((item) => {
+      const option = addChild(panel, 'button', `character-media-picker-option${selectedPath === item.relativePath ? ' selected' : ''}`); option.type = 'button';
+      addChild(option, 'b', '', characterMediaOriginalName(item));
+      if (item.alias) addChild(option, 'small', '', `别名：${item.alias}`);
+      option.addEventListener('mousedown', (event) => event.preventDefault());
+      option.addEventListener('click', () => choose(item));
+    });
+    if (normalizedQuery && !visibleItems.length) addChild(panel, 'div', 'character-media-picker-empty', '没有匹配的头像');
+  };
+  input.addEventListener('focus', () => { renderOptions(input.value); panel.hidden = false; });
+  input.addEventListener('input', () => { renderOptions(input.value); panel.hidden = false; });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { panel.hidden = true; syncInput(); input.blur(); return; }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const query = input.value.trim().toLocaleLowerCase();
+    const exactOriginal = items.find((item) => characterMediaOriginalName(item).toLocaleLowerCase() === query);
+    const exactAlias = items.find((item) => String(item.alias || '').toLocaleLowerCase() === query);
+    choose(exactOriginal || exactAlias || visibleItems[0] || null);
+  });
+  input.addEventListener('blur', () => setTimeout(() => { panel.hidden = true; syncInput(); }, 100));
+  syncInput();
+  return picker;
+}
+function previewCharacterId(block) {
+  if (block?.type !== 'dialogue') return '';
+  if (block.characterId) return block.characterId;
+  return desktopState.data?.characters?.find((character) => character.name === block.character)?.id || '';
+}
+function previewPortraitSpec(scene, characterId, blockIndex) {
+  if (!characterId) return null;
+  const character = desktopState.data?.characters?.find((item) => item.id === characterId);
+  const candidates = [];
+  for (let index = blockIndex; index >= 0; index -= 1) if (previewCharacterId(scene.blocks[index]) === characterId) candidates.push(scene.blocks[index]);
+  for (let index = blockIndex + 1; index < scene.blocks.length; index += 1) if (previewCharacterId(scene.blocks[index]) === characterId) candidates.push(scene.blocks[index]);
+  const portraitBlock = candidates.find((block) => block.portrait || block.portraitPreset) || candidates[0];
+  const defaultPortrait = characterDefaultMedia(character, 'portraitGroup');
+  return {
+    name: character?.name || portraitBlock?.character || '',
+    portrait: portraitBlock?.portrait || defaultPortrait?.relativePath || '',
+    portraitPreset: (portraitBlock?.portrait || defaultPortrait) ? null : portraitBlock?.portraitPreset || character?.portraitPreset || null,
+    color: portraitBlock?.characterColor || character?.color || '#f2674f'
+  };
+}
+function previewOtherCharacterId(scene, blockIndex, perspectiveCharacterId) {
+  const currentCharacterId = previewCharacterId(scene.blocks[blockIndex]);
+  if (currentCharacterId && currentCharacterId !== perspectiveCharacterId) return currentCharacterId;
+  for (let index = blockIndex - 1; index >= 0; index -= 1) {
+    const characterId = previewCharacterId(scene.blocks[index]);
+    if (characterId && characterId !== perspectiveCharacterId) return characterId;
+  }
+  return '';
+}
+function renderPreviewPortrait(element, side, spec, speaking, renderToken) {
+  element.removeAttribute('style');
+  element.className = `preview-character preview-character-${side}${spec ? '' : ' no-portrait'}${speaking ? ' speaking' : ''}`;
+  element.hidden = !spec;
+  element.replaceChildren();
+  if (!spec) return;
+  element.title = spec.name || '';
+  if (spec.portrait && desktopState.filePath) {
+    desktopApi.readAsset(desktopState.filePath, spec.portrait).then((src) => {
+      if (!src || renderToken !== previewRenderToken) return;
+      element.style.background = `center bottom / contain no-repeat url("${src}")`;
+    }).catch(() => element.classList.add('asset-missing'));
+  } else if (spec.portraitPreset) {
+    element.classList.add('default-silhouette', `silhouette-${spec.portraitPreset}`);
+    element.style.setProperty('--character-color', spec.color);
+  }
+  if (spec.name) addChild(element, 'span', 'preview-character-name', spec.name);
+}
+function nextPreviewSceneLocation() {
+  const chapters = desktopState.data?.chapters || [];
+  const chapter = chapters[previewState.chapterIndex];
+  if (chapter?.scenes?.[previewState.sceneIndex + 1]) return { chapterIndex: previewState.chapterIndex, sceneIndex: previewState.sceneIndex + 1 };
+  for (let chapterIndex = previewState.chapterIndex + 1; chapterIndex < chapters.length; chapterIndex += 1) {
+    if (chapters[chapterIndex]?.scenes?.length) return { chapterIndex, sceneIndex: 0 };
+  }
+  return null;
+}
+function previewLocationForBlockId(blockId) {
+  for (let chapterIndex = 0; chapterIndex < (desktopState.data?.chapters || []).length; chapterIndex += 1) {
+    const chapter = desktopState.data.chapters[chapterIndex];
+    for (let sceneIndex = 0; sceneIndex < (chapter.scenes || []).length; sceneIndex += 1) {
+      const blockIndex = (chapter.scenes[sceneIndex].blocks || []).findIndex((block) => block.id === blockId);
+      if (blockIndex >= 0) return { chapterIndex, sceneIndex, blockIndex };
+    }
+  }
+  return null;
+}
+function setPreviewScene(location) {
+  previewState = { chapterIndex: location.chapterIndex, sceneIndex: location.sceneIndex, blockIndex: location.blockIndex || 0, mode: 'playing' };
+  if (!(previewSceneData()?.blocks || []).length) previewState.mode = 'scene-end';
+  renderPreviewFrame();
+}
+function closeScenePreview() { document.getElementById('previewModal')?.classList.add('hidden'); previewState = null; previewRenderToken += 1; }
+function startScenePreview() {
   syncCurrentScene();
-  const scene = currentScene();
-  const block = scene?.blocks?.[selectedBlockIndex];
-  const stage = document.querySelector('.preview-scene');
-  const character = document.querySelector('.preview-character');
+  setPreviewScene({ chapterIndex: activeChapterIndex, sceneIndex: activeSceneIndex, blockIndex: 0 });
+  document.getElementById('previewModal')?.classList.remove('hidden');
+  requestAnimationFrame(() => document.getElementById('previewScene')?.focus());
+}
+function advanceScenePreview(fromChoice = false) {
+  if (!previewState) return;
+  if (previewState.mode === 'project-end') { closeScenePreview(); return; }
+  if (previewState.mode === 'scene-end') {
+    const nextScene = nextPreviewSceneLocation();
+    if (nextScene) setPreviewScene(nextScene); else { previewState.mode = 'project-end'; renderPreviewFrame(); }
+    return;
+  }
+  if (previewBlockData()?.type === 'choice' && !fromChoice) return;
+  const blocks = previewSceneData()?.blocks || [];
+  if (previewState.blockIndex + 1 < blocks.length) previewState.blockIndex += 1;
+  else previewState.mode = 'scene-end';
+  renderPreviewFrame();
+}
+function renderPreviewFrame() {
+  if (!previewState) return;
+  const renderToken = ++previewRenderToken;
+  const chapter = desktopState.data?.chapters?.[previewState.chapterIndex];
+  const scene = previewSceneData();
+  const block = previewBlockData();
+  const stage = document.getElementById('previewScene');
+  const dialogue = document.getElementById('previewDialogue');
   const speaker = document.getElementById('previewSpeaker');
   const text = document.getElementById('previewText');
   const options = document.querySelector('.preview-options');
+  const segmentCard = document.getElementById('previewSegmentCard');
+  const endCard = document.getElementById('previewEndCard');
+  const advanceHint = document.getElementById('previewAdvanceHint');
+  document.getElementById('previewSceneName').textContent = scene?.title || '未命名场景';
+  document.getElementById('previewSceneLocation').textContent = `${chapter?.title || '未命名章节'} · ${scene?.title || '未命名场景'}`;
+  document.getElementById('previewProgress').textContent = previewState.mode === 'playing' ? `${Math.min(previewState.blockIndex + 1, scene?.blocks?.length || 0)} / ${scene?.blocks?.length || 0}` : previewState.mode === 'scene-end' ? '场景结束' : '预览结束';
   stage.style.backgroundImage = '';
-  character.removeAttribute('style');
-  character.className = 'preview-character no-portrait';
-  speaker.textContent = block?.type === 'dialogue' ? block.character : block?.type === 'narration' ? '旁白' : '';
-  text.textContent = block?.type === 'choice' ? block.title : block?.text || '当前场景没有可预览内容。';
-  options.replaceChildren();
-  if (block?.type === 'choice') (block.options || []).forEach((option) => {
-    const value = typeof option === 'string' ? { text: option, targetBlockId: '' } : option;
-    const button = addChild(options, 'button', '', value.text || '未命名选项');
-    if (value.targetBlockId) button.addEventListener('click', () => { document.getElementById('previewModal').classList.add('hidden'); navigateToDialogueNode(value.targetBlockId); });
-  });
-  if (scene?.background && desktopState.filePath) desktopApi.readAsset(desktopState.filePath, scene.background).then((src) => { if (src) stage.style.backgroundImage = `linear-gradient(180deg, transparent 35%, rgba(30,35,33,.55)), url("${src}")`; }).catch(() => {});
-  if (block?.portrait && desktopState.filePath) {
-    desktopApi.readAsset(desktopState.filePath, block.portrait).then((src) => { if (src) { character.className = 'preview-character'; character.style.background = `center bottom / contain no-repeat url("${src}")`; } }).catch(() => {});
-  } else if (block?.portraitPreset) {
-    character.className = `preview-character default-silhouette silhouette-${block.portraitPreset}`;
-    character.style.setProperty('--character-color', block.characterColor || '#f2674f');
+  dialogue.className = 'preview-dialogue'; dialogue.classList.remove('hidden');
+  segmentCard.classList.add('hidden'); endCard.classList.add('hidden');
+  speaker.textContent = ''; text.textContent = ''; options.replaceChildren(); advanceHint.textContent = '点击继续';
+  if (scene?.background && desktopState.filePath) desktopApi.readAsset(desktopState.filePath, scene.background).then((src) => { if (src && renderToken === previewRenderToken) stage.style.backgroundImage = `linear-gradient(180deg, rgba(21,24,25,.06) 20%, rgba(20,24,25,.62) 100%), url("${src}")`; }).catch(() => {});
+  if (previewState.mode !== 'playing') {
+    dialogue.classList.add('hidden'); endCard.classList.remove('hidden');
+    const nextScene = previewState.mode === 'scene-end' ? nextPreviewSceneLocation() : null;
+    document.getElementById('previewEndEyebrow').textContent = previewState.mode === 'scene-end' ? '本场景结束' : '预览结束';
+    document.getElementById('previewEndTitle').textContent = nextScene ? desktopState.data.chapters[nextScene.chapterIndex].scenes[nextScene.sceneIndex].title : '已经到达项目末尾';
+    document.getElementById('previewEndHint').textContent = nextScene ? '点击进入下一个场景' : '点击关闭预览';
+    renderPreviewPortrait(document.getElementById('previewCharacterLeft'), 'left', null, false, renderToken);
+    renderPreviewPortrait(document.getElementById('previewCharacterRight'), 'right', null, false, renderToken);
+    return;
   }
+  const perspectiveCharacterId = previewPerspectiveCharacterId(scene, previewState.blockIndex);
+  const currentCharacterId = previewCharacterId(block);
+  const otherCharacterId = previewOtherCharacterId(scene, previewState.blockIndex, perspectiveCharacterId);
+  renderPreviewPortrait(document.getElementById('previewCharacterRight'), 'right', previewPortraitSpec(scene, perspectiveCharacterId, previewState.blockIndex), currentCharacterId === perspectiveCharacterId, renderToken);
+  renderPreviewPortrait(document.getElementById('previewCharacterLeft'), 'left', previewPortraitSpec(scene, otherCharacterId || (!perspectiveCharacterId ? currentCharacterId : ''), previewState.blockIndex), currentCharacterId && currentCharacterId !== perspectiveCharacterId, renderToken);
+  if (block?.type === 'segment') {
+    dialogue.classList.add('hidden'); segmentCard.classList.remove('hidden');
+    document.getElementById('previewSegmentTitle').textContent = block.title || '未命名分段';
+    const perspective = desktopState.data?.characters?.find((character) => character.id === block.perspectiveCharacterId);
+    document.getElementById('previewSegmentPerspective').textContent = perspective ? `主视角 · ${perspective.name}` : '未设置主视角';
+    return;
+  }
+  if (block?.type === 'dialogue') {
+    speaker.textContent = block.character || '未设置角色';
+    if (block.textHtml) text.innerHTML = sanitizeRichTextHtml(block.textHtml); else text.textContent = block.text || '……';
+  } else if (block?.type === 'narration') {
+    dialogue.classList.add('narration'); speaker.textContent = '旁白'; text.textContent = block.text || '……';
+  } else if (block?.type === 'choice') {
+    dialogue.classList.add('choice-preview'); speaker.textContent = '玩家选择'; text.textContent = block.title || '请选择'; advanceHint.textContent = '选择后继续';
+    (block.options || []).forEach((option) => {
+      const value = typeof option === 'string' ? { text: option, targetBlockId: '' } : option;
+      const button = addChild(options, 'button', '', value.text || '未命名选项');
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const target = value.targetBlockId ? previewLocationForBlockId(value.targetBlockId) : null;
+        if (target) { previewState = { ...target, mode: 'playing' }; renderPreviewFrame(); }
+        else advanceScenePreview(true);
+      });
+    });
+  } else text.textContent = '当前内容暂不支持预览。';
 }
 
 navItems.forEach((item) => item.addEventListener('click', () => {
@@ -1026,7 +1502,7 @@ navItems.forEach((item) => item.addEventListener('click', () => {
   const target = item.dataset.view;
   navItems.forEach((nav) => nav.classList.toggle('active', nav === item));
   document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor');
-  views.characters.classList.toggle('hidden', target !== 'characters'); views.assets.classList.toggle('hidden', target !== 'assets');
+  views.characters.classList.toggle('hidden', target !== 'characters'); views.relationships?.classList.add('hidden'); views.assets.classList.toggle('hidden', target !== 'assets');
   document.getElementById('floatingInspectorLayer')?.classList.toggle('hidden', target !== 'editor');
   const breadcrumb = document.querySelector('.breadcrumb'); const separator = breadcrumb?.querySelector('span:nth-child(2)'); const detail = breadcrumb?.querySelector('strong');
   breadcrumb?.querySelector('span:first-child')?.replaceChildren(document.createTextNode(target === 'characters' ? '角色与立绘' : target === 'assets' ? '项目素材库' : '剧本编辑器'));
@@ -1051,7 +1527,9 @@ document.addEventListener('click', (event) => {
   if (event.target.closest('#addDialogue')) {
     syncCurrentScene();
     const character = desktopState.data.characters?.find((item) => item.id === newDialogueCharacterId);
-    currentScene().blocks.push({ id: createContentId('dialogue'), type: 'dialogue', character: character?.name || '', characterId: character?.id || '', characterKey: 'mei', characterColor: character?.color || '#b8bcb8', portraitPreset: character?.portraitPreset || null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' });
+    const dialogue = { id: createContentId('dialogue'), type: 'dialogue', character: '', characterId: '', characterKey: 'mei', characterColor: '#b8bcb8', portraitPreset: null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' };
+    if (character) applyCharacterToBlock(character, dialogue);
+    currentScene().blocks.push(dialogue);
     selectedBlockIndex = currentScene().blocks.length - 1;
     renderScene();
     revealNewBlock(selectedBlockIndex, '.block-content p');
@@ -1310,8 +1788,11 @@ document.getElementById('projectSearchInput')?.addEventListener('focus', renderP
 document.getElementById('projectCreateForm')?.addEventListener('submit', createProjectFromHome);
 document.getElementById('chooseProjectLocationBtn')?.addEventListener('click', async () => { const directory = await desktopApi.chooseProjectDirectory(); if (directory) document.getElementById('projectCreateLocation').value = directory; });
 document.getElementById('openProjectFromHomeBtn')?.addEventListener('click', openProject);
-document.getElementById('previewBtn')?.addEventListener('click', () => { updatePreview(); document.getElementById('previewModal').classList.remove('hidden'); }); document.getElementById('closePreview')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden')); document.querySelector('.modal-backdrop')?.addEventListener('click', () => document.getElementById('previewModal').classList.add('hidden'));
-document.addEventListener('keydown', (event) => { const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeCriticalNodePickers(); closeWindowProjectMenu(); closeWindowSettingsMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k' && !event.shiftKey) { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); closeWindowProjectMenu(); setWindowSettingsMenuOpen(true); } });
+document.getElementById('previewBtn')?.addEventListener('click', startScenePreview);
+document.getElementById('closePreview')?.addEventListener('click', closeScenePreview);
+document.querySelector('.modal-backdrop')?.addEventListener('click', closeScenePreview);
+document.getElementById('previewScene')?.addEventListener('click', (event) => { if (!event.target.closest('.preview-options button')) advanceScenePreview(); });
+document.addEventListener('keydown', (event) => { const previewOpen = !document.getElementById('previewModal')?.classList.contains('hidden'); if (previewOpen) { if (event.key === 'Escape') { event.preventDefault(); closeScenePreview(); return; } if (['Enter', ' ', 'ArrowRight'].includes(event.key)) { event.preventDefault(); advanceScenePreview(); return; } } const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeCriticalNodePickers(); closeWindowProjectMenu(); closeWindowSettingsMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k' && !event.shiftKey) { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); closeWindowProjectMenu(); setWindowSettingsMenuOpen(true); } });
 applyThemePreference(currentThemePreference(), false);
 applyInterfaceScale(Number(localStorage.getItem('rropeway-interface-scale') || 100), false);
 applyEditorPreferences(currentEditorPreferences(), false);
@@ -1563,7 +2044,7 @@ function renderInspector() {
       const characterSelect = addChild(characterGroup, 'select', 'select-control editor-select');
       const noCharacter = addChild(characterSelect, 'option', '', '未设置角色'); noCharacter.value = ''; noCharacter.selected = !dialogueBlock.characterId && !dialogueBlock.character;
       characters.forEach((character) => { const option = addChild(characterSelect, 'option', '', character.name); option.value = character.id; if (character.name === dialogueBlock.character) option.selected = true; });
-      characterSelect.addEventListener('change', () => { const character = characters.find((item) => item.id === characterSelect.value); if (character) applyCharacterToBlock(character, dialogueBlock); else { dialogueBlock.character = ''; dialogueBlock.characterId = ''; dialogueBlock.characterColor = '#b8bcb8'; dialogueBlock.portraitPreset = null; dialogueBlock.portrait = undefined; } renderScene(); markDirty(); });
+      characterSelect.addEventListener('change', () => { const character = characters.find((item) => item.id === characterSelect.value); if (character) applyCharacterToBlock(character, dialogueBlock); else { dialogueBlock.character = ''; dialogueBlock.characterId = ''; dialogueBlock.characterColor = '#b8bcb8'; dialogueBlock.portraitPreset = null; dialogueBlock.avatar = undefined; dialogueBlock.portrait = undefined; } renderScene(); markDirty(); });
       const statusGroup = addChild(properties, 'div', 'property-group'); addChild(statusGroup, 'label', '', '状态标签');
       const statusEditor = addChild(statusGroup, 'div', 'status-tag-editor');
       if (!(dialogueBlock.statusTags || []).includes('关键节点')) {
@@ -1575,9 +2056,12 @@ function renderInspector() {
       const commitStatusTag = (refocus) => { const value = statusInput.value.trim(); if (!value) return; syncCurrentScene(); const liveDialogue = currentScene()?.blocks?.find((item) => item.id === dialogueBlock.id); if (!liveDialogue) return; liveDialogue.statusTags ||= []; if (liveDialogue.statusTags.includes(value)) { statusInput.value = ''; return; } if (value === '关键节点') liveDialogue.statusTags.unshift(value); else liveDialogue.statusTags.push(value); renderScene(); markDirty(); renderInspector(); if (refocus) requestAnimationFrame(() => document.querySelector('.status-tag-input')?.focus()); };
       statusInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); commitStatusTag(true); } }); statusInput.addEventListener('blur', () => setTimeout(() => commitStatusTag(false), 0));
       const voiceGroup = addChild(properties, 'div', 'property-group'); addChild(voiceGroup, 'label', '', '语音提示'); const voiceSelect = addChild(voiceGroup, 'select', 'select-control editor-select'); ['女声 · 轻', '女声 · 强', '男声 · 低', '男声 · 清晰', '无语音'].forEach((voice) => { const option = addChild(voiceSelect, 'option', '', voice); option.value = voice; option.selected = dialogueBlock.voice === voice; }); voiceSelect.addEventListener('change', () => { dialogueBlock.voice = voiceSelect.value; renderScene(); markDirty(); });
-      const assetGroup = addChild(properties, 'div', 'property-group'); addChild(assetGroup, 'label', '', '当前立绘'); const assetSelect = addChild(assetGroup, 'select', 'select-control editor-select');
+      const selectedCharacter = characters.find((item) => item.id === dialogueBlock.characterId || item.name === dialogueBlock.character);
+      const avatarGroup = addChild(properties, 'div', 'property-group'); addChild(avatarGroup, 'label', '', '当前头像表情');
+      createCharacterMediaSearchPicker(avatarGroup, characterMediaGroup(selectedCharacter, 'avatarGroup'), dialogueBlock.avatar, (relativePath) => { dialogueBlock.avatar = relativePath || undefined; renderScene(); markDirty(); });
+      const assetGroup = addChild(properties, 'div', 'property-group'); addChild(assetGroup, 'label', '', '当前立绘表情'); const assetSelect = addChild(assetGroup, 'select', 'select-control editor-select');
       const none = addChild(assetSelect, 'option', '', '不使用立绘'); none.value = 'none'; none.selected = !dialogueBlock.portrait && !dialogueBlock.portraitPreset;
-      const selectedCharacter = characters.find((item) => item.name === dialogueBlock.character);
+      characterMediaGroup(selectedCharacter, 'portraitGroup').forEach((portrait) => { const option = addChild(assetSelect, 'option', '', portrait.name); option.value = `asset:${portrait.relativePath}`; option.selected = dialogueBlock.portrait === portrait.relativePath; });
       if (selectedCharacter?.portraitPreset) { const preset = addChild(assetSelect, 'option', '', '角色默认立绘'); preset.value = `preset:${selectedCharacter.portraitPreset}`; preset.selected = !dialogueBlock.portrait && dialogueBlock.portraitPreset === selectedCharacter.portraitPreset; }
       (desktopState.data.assets || []).filter((asset) => !['mp3', 'wav', 'ogg'].includes(asset.type)).forEach((asset) => { const option = addChild(assetSelect, 'option', '', asset.name); option.value = `asset:${asset.relativePath}`; option.selected = dialogueBlock.portrait === asset.relativePath; });
       assetSelect.addEventListener('change', () => { if (assetSelect.value.startsWith('asset:')) { dialogueBlock.portrait = assetSelect.value.slice(6); dialogueBlock.portraitPreset = null; } else if (assetSelect.value.startsWith('preset:')) { dialogueBlock.portrait = undefined; dialogueBlock.portraitPreset = assetSelect.value.slice(7); } else { dialogueBlock.portrait = undefined; dialogueBlock.portraitPreset = null; } renderScene(); markDirty(); });
@@ -1589,12 +2073,154 @@ function renderInspector() {
   requestAnimationFrame(() => clampFloatingInspectorSections());
 }
 function applyCharacterToBlock(character, block) {
+  const defaultAvatar = characterDefaultMedia(character, 'avatarGroup');
+  const defaultPortrait = characterDefaultMedia(character, 'portraitGroup');
   block.character = character.name;
   block.characterId = character.id;
   block.characterKey = 'mei';
   block.characterColor = character.color || '#f2674f';
-  block.portraitPreset = character.portraitPreset || null;
-  block.portrait = undefined;
+  block.avatar = defaultAvatar?.relativePath || undefined;
+  block.portrait = defaultPortrait?.relativePath || undefined;
+  block.portraitPreset = defaultPortrait ? null : character.portraitPreset || null;
+}
+function ensureRelationshipGraph() {
+  desktopState.data.relationshipGraph ||= { positions: {}, relationships: [] };
+  desktopState.data.relationshipGraph.positions ||= {};
+  desktopState.data.relationshipGraph.relationships ||= [];
+  return desktopState.data.relationshipGraph;
+}
+function relationshipNodePosition(graph, characterId, characterIndex, characterCount) {
+  if (graph.positions[characterId]) return graph.positions[characterId];
+  const angle = characterCount === 1 ? -Math.PI / 2 : -Math.PI / 2 + (Math.PI * 2 * characterIndex) / characterCount;
+  return { x: 0.5 + Math.cos(angle) * 0.31, y: 0.5 + Math.sin(angle) * 0.3 };
+}
+function showRelationshipGraph() {
+  if (!desktopState.data) return;
+  document.querySelector('.editor-layout')?.classList.add('hidden');
+  views.characters?.classList.add('hidden');
+  views.assets?.classList.add('hidden');
+  views.relationships?.classList.remove('hidden');
+  document.getElementById('floatingInspectorLayer')?.classList.add('hidden');
+  navItems.forEach((item) => item.classList.toggle('active', item.dataset.view === 'characters'));
+  const breadcrumb = document.querySelector('.breadcrumb');
+  breadcrumb?.querySelector('span:first-child')?.replaceChildren(document.createTextNode('角色关系图'));
+  const separator = breadcrumb?.querySelector('span:nth-child(2)'); const detail = breadcrumb?.querySelector('strong');
+  if (separator) separator.hidden = true; if (detail) detail.hidden = true;
+  renderRelationshipGraph();
+}
+function renderRelationshipGraph() {
+  const view = views.relationships;
+  if (!view || !desktopState.data) return;
+  const graph = ensureRelationshipGraph();
+  const characters = desktopState.data.characters || [];
+  if (selectedRelationshipId && !graph.relationships.some((relationship) => relationship.id === selectedRelationshipId)) selectedRelationshipId = '';
+  view.replaceChildren();
+  const heading = addChild(view, 'div', 'relationship-heading');
+  const headingCopy = addChild(heading, 'div', 'relationship-heading-copy');
+  const backButton = addChild(headingCopy, 'button', 'relationship-back', '←'); backButton.type = 'button'; backButton.title = '返回角色与立绘';
+  const titleCopy = addChild(headingCopy, 'div'); addChild(titleCopy, 'div', 'eyebrow', 'CHARACTER RELATIONSHIP MAP'); addChild(titleCopy, 'h2', '', '角色关系图');
+  const resetLayout = addChild(heading, 'button', 'file-button', '重新布局'); resetLayout.type = 'button';
+  backButton.addEventListener('click', () => document.querySelector('[data-view="characters"]')?.click());
+  resetLayout.addEventListener('click', () => { graph.positions = {}; selectedRelationshipId = ''; renderRelationshipGraph(); markDirty(); });
+  const surface = addChild(view, 'div', 'relationship-surface');
+  const edgeLayer = addChild(surface, 'div', 'relationship-edge-layer');
+  const nodeLayer = addChild(surface, 'div', 'relationship-node-layer');
+  const editor = addChild(surface, 'div', 'relationship-editor');
+  if (!characters.length) {
+    const empty = addChild(surface, 'div', 'relationship-empty');
+    addChild(empty, 'b', '', '还没有角色');
+    const create = addChild(empty, 'button', 'primary-button', '新建角色'); create.type = 'button'; create.addEventListener('click', () => document.querySelector('[data-view="characters"]')?.click());
+    return;
+  }
+  const positions = new Map(characters.map((character, characterIndex) => [character.id, relationshipNodePosition(graph, character.id, characterIndex, characters.length)]));
+  const updateNodePosition = (characterId, position) => {
+    positions.set(characterId, position);
+    const characterNode = nodeLayer.querySelector(`[data-character-id="${characterId}"]`);
+    if (characterNode) { characterNode.style.left = `${position.x * 100}%`; characterNode.style.top = `${position.y * 100}%`; }
+  };
+  const renderEditor = () => {
+    editor.replaceChildren();
+    const relationship = graph.relationships.find((item) => item.id === selectedRelationshipId);
+    editor.classList.toggle('hidden', !relationship);
+    if (!relationship) return;
+    const sourceCharacter = characters.find((item) => item.id === relationship.sourceCharacterId);
+    const targetCharacter = characters.find((item) => item.id === relationship.targetCharacterId);
+    const names = addChild(editor, 'div', 'relationship-editor-names');
+    addChild(names, 'b', '', sourceCharacter?.name || '未知角色'); addChild(names, 'span', '', '—'); addChild(names, 'b', '', targetCharacter?.name || '未知角色');
+    const labelInput = addChild(editor, 'input', 'relationship-label-input'); labelInput.value = relationship.label; labelInput.placeholder = '关系名称';
+    const colorInput = addChild(editor, 'input', 'relationship-color-input'); colorInput.type = 'color'; colorInput.value = relationship.color;
+    const remove = addChild(editor, 'button', 'relationship-delete', '×'); remove.type = 'button'; remove.title = '删除关系';
+    labelInput.addEventListener('change', () => { relationship.label = labelInput.value.trim() || '关系'; renderEdges(); markDirty(); });
+    colorInput.addEventListener('change', () => { relationship.color = colorInput.value; renderEdges(); markDirty(); });
+    remove.addEventListener('click', () => { graph.relationships = graph.relationships.filter((item) => item.id !== relationship.id); selectedRelationshipId = ''; renderEdges(); markDirty(); });
+  };
+  const renderEdges = () => {
+    edgeLayer.replaceChildren();
+    const surfaceRect = surface.getBoundingClientRect();
+    graph.relationships.forEach((relationship) => {
+      const sourcePosition = positions.get(relationship.sourceCharacterId);
+      const targetPosition = positions.get(relationship.targetCharacterId);
+      if (!sourcePosition || !targetPosition) return;
+      const sourceX = sourcePosition.x * surfaceRect.width; const sourceY = sourcePosition.y * surfaceRect.height;
+      const targetX = targetPosition.x * surfaceRect.width; const targetY = targetPosition.y * surfaceRect.height;
+      const distance = Math.hypot(targetX - sourceX, targetY - sourceY);
+      const angle = Math.atan2(targetY - sourceY, targetX - sourceX) * 180 / Math.PI;
+      const line = addChild(edgeLayer, 'button', `relationship-edge${selectedRelationshipId === relationship.id ? ' selected' : ''}`); line.type = 'button'; line.title = relationship.label;
+      line.style.left = `${sourceX}px`; line.style.top = `${sourceY}px`; line.style.width = `${distance}px`; line.style.transform = `translateY(-50%) rotate(${angle}deg)`; line.style.setProperty('--relationship-color', relationship.color);
+      line.addEventListener('click', () => { selectedRelationshipId = relationship.id; renderEdges(); });
+      const label = addChild(edgeLayer, 'button', `relationship-edge-label${selectedRelationshipId === relationship.id ? ' selected' : ''}`, relationship.label); label.type = 'button'; label.style.left = `${(sourceX + targetX) / 2}px`; label.style.top = `${(sourceY + targetY) / 2}px`; label.style.setProperty('--relationship-color', relationship.color);
+      label.addEventListener('click', () => { selectedRelationshipId = relationship.id; renderEdges(); });
+    });
+    renderEditor();
+  };
+  const startRelationship = (event, sourceCharacterId) => {
+    event.preventDefault(); event.stopPropagation();
+    const sourcePosition = positions.get(sourceCharacterId); const surfaceRect = surface.getBoundingClientRect();
+    const previewLine = addChild(edgeLayer, 'div', 'relationship-edge-preview');
+    const updatePreview = (pointerEvent) => {
+      const sourceX = sourcePosition.x * surfaceRect.width; const sourceY = sourcePosition.y * surfaceRect.height;
+      const targetX = Math.max(0, Math.min(surfaceRect.width, pointerEvent.clientX - surfaceRect.left)); const targetY = Math.max(0, Math.min(surfaceRect.height, pointerEvent.clientY - surfaceRect.top));
+      previewLine.style.left = `${sourceX}px`; previewLine.style.top = `${sourceY}px`; previewLine.style.width = `${Math.hypot(targetX - sourceX, targetY - sourceY)}px`; previewLine.style.transform = `translateY(-50%) rotate(${Math.atan2(targetY - sourceY, targetX - sourceX) * 180 / Math.PI}deg)`;
+    };
+    const stopRelationship = (pointerEvent) => {
+      window.removeEventListener('pointermove', updatePreview); window.removeEventListener('pointerup', stopRelationship); previewLine.remove();
+      const targetNode = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY)?.closest('.relationship-node');
+      const targetCharacterId = targetNode?.dataset.characterId;
+      if (!targetCharacterId || targetCharacterId === sourceCharacterId) return;
+      const existing = graph.relationships.find((item) => (item.sourceCharacterId === sourceCharacterId && item.targetCharacterId === targetCharacterId) || (item.sourceCharacterId === targetCharacterId && item.targetCharacterId === sourceCharacterId));
+      if (existing) selectedRelationshipId = existing.id;
+      else {
+        const relationship = { id: `relationship-${Date.now()}`, sourceCharacterId, targetCharacterId, label: '关系', color: '#f2674f' };
+        graph.relationships.push(relationship); selectedRelationshipId = relationship.id; markDirty();
+      }
+      renderEdges();
+    };
+    updatePreview(event); window.addEventListener('pointermove', updatePreview); window.addEventListener('pointerup', stopRelationship);
+  };
+  characters.forEach((character, characterIndex) => {
+    const position = positions.get(character.id);
+    const characterNode = addChild(nodeLayer, 'article', 'relationship-node'); characterNode.dataset.characterId = character.id; characterNode.style.left = `${position.x * 100}%`; characterNode.style.top = `${position.y * 100}%`; characterNode.style.setProperty('--character-color', character.color || '#f2674f');
+    const avatar = addChild(characterNode, 'div', 'relationship-node-avatar', character.name.slice(0, 1));
+    const defaultAvatar = characterDefaultMedia(character, 'avatarGroup');
+    if (defaultAvatar) { const image = addChild(avatar, 'img'); image.alt = character.name; loadProjectImage(defaultAvatar.relativePath, image, avatar); }
+    const copy = addChild(characterNode, 'div', 'relationship-node-copy'); addChild(copy, 'b', '', character.name); addChild(copy, 'small', '', character.role || '未设置定位');
+    const connector = addChild(characterNode, 'button', 'relationship-node-connector'); connector.type = 'button'; connector.title = '拖动创建关系'; connector.setAttribute('aria-label', `从${character.name}创建关系`);
+    connector.addEventListener('pointerdown', (event) => startRelationship(event, character.id));
+    characterNode.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('.relationship-node-connector')) return;
+      event.preventDefault();
+      const surfaceRect = surface.getBoundingClientRect();
+      const startPosition = positions.get(character.id); const startX = event.clientX; const startY = event.clientY;
+      characterNode.setPointerCapture(event.pointerId);
+      const moveNode = (pointerEvent) => {
+        const nextPosition = { x: Math.min(0.92, Math.max(0.08, startPosition.x + (pointerEvent.clientX - startX) / surfaceRect.width)), y: Math.min(0.88, Math.max(0.12, startPosition.y + (pointerEvent.clientY - startY) / surfaceRect.height)) };
+        updateNodePosition(character.id, nextPosition); renderEdges();
+      };
+      const stopNode = (pointerEvent) => { characterNode.removeEventListener('pointermove', moveNode); characterNode.removeEventListener('pointerup', stopNode); if (characterNode.hasPointerCapture(pointerEvent.pointerId)) characterNode.releasePointerCapture(pointerEvent.pointerId); graph.positions[character.id] = positions.get(character.id); markDirty(); };
+      characterNode.addEventListener('pointermove', moveNode); characterNode.addEventListener('pointerup', stopNode);
+    });
+  });
+  requestAnimationFrame(renderEdges);
 }
 function renderCharacters() {
   const view = document.getElementById('charactersView');
@@ -1604,8 +2230,10 @@ function renderCharacters() {
   const copy = addChild(heading, 'div');
   addChild(copy, 'div', 'eyebrow', 'CHARACTER LIBRARY');
   addChild(copy, 'h2', '', '角色与立绘');
-  addChild(copy, 'p', 'muted', '管理角色基础信息、代表色和默认立绘。');
-  const createButton = addChild(heading, 'button', 'primary-button', '＋ 新建角色');
+  addChild(copy, 'p', 'muted', '管理角色信息、头像表情组和立绘表情组。');
+  const headingActions = addChild(heading, 'div', 'heading-actions');
+  const relationshipsButton = addChild(headingActions, 'button', 'file-button', '关系图'); relationshipsButton.type = 'button'; relationshipsButton.addEventListener('click', showRelationshipGraph);
+  const createButton = addChild(headingActions, 'button', 'primary-button', '＋ 新建角色');
   createButton.addEventListener('click', async () => {
     const character = await requestCharacterForm();
     if (!character) return;
@@ -1622,8 +2250,12 @@ function renderCharacters() {
     const card = addChild(grid, 'article', `character-card${activeDialogueBlock()?.character === character.name ? ' selected' : ''}`); card.dataset.characterId = character.id;
     const art = addChild(card, 'div', 'character-portrait-card');
     art.style.setProperty('--character-color', character.color || '#f2674f');
-    if (character.portraitPreset) addChild(art, 'div', `default-silhouette silhouette-${character.portraitPreset}`);
+    const defaultPortrait = characterDefaultMedia(character, 'portraitGroup');
+    const defaultAvatar = characterDefaultMedia(character, 'avatarGroup');
+    if (defaultPortrait) { const image = addChild(art, 'img', 'character-card-portrait-image'); image.alt = defaultPortrait.name; loadProjectImage(defaultPortrait.relativePath, image, art); }
+    else if (character.portraitPreset) addChild(art, 'div', `default-silhouette silhouette-${character.portraitPreset}`);
     else addChild(art, 'div', 'no-character-portrait', '未添加立绘');
+    if (defaultAvatar) { const avatar = addChild(art, 'div', 'character-card-avatar'); const image = addChild(avatar, 'img'); image.alt = defaultAvatar.name; loadProjectImage(defaultAvatar.relativePath, image, avatar); }
     addChild(art, 'span', 'character-portrait-name', character.name);
     const cardCopy = addChild(card, 'div', 'character-card-copy');
     const info = addChild(cardCopy, 'div');
@@ -1631,9 +2263,12 @@ function renderCharacters() {
     addChild(info, 'p', '', character.role || '未设置定位');
     const colorDot = addChild(cardCopy, 'span', 'color-dot'); colorDot.style.background = character.color || '#f2674f';
     if (character.description) addChild(card, 'p', 'character-description', character.description);
+    addChild(card, 'div', 'character-media-counts', `头像 ${characterMediaGroup(character, 'avatarGroup').length} · 立绘 ${characterMediaGroup(character, 'portraitGroup').length}`);
     const footer = addChild(card, 'div', 'card-foot');
+    const media = addChild(footer, 'button', 'character-card-action', '头像与立绘');
     const edit = addChild(footer, 'button', 'character-card-action', '编辑信息');
     const use = addChild(footer, 'button', 'character-card-action primary', '用于当前对白');
+    media.addEventListener('click', () => openCharacterMediaManager(character.id));
     edit.addEventListener('click', async () => {
       const updated = await requestCharacterForm(character);
       if (!updated) return;

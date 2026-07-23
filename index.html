@@ -81,11 +81,30 @@
         <div class="floating-inspector-layer" id="floatingInspectorLayer"></div>
 
         <section class="alternate-view hidden" id="charactersView"></section>
+        <section class="alternate-view hidden" id="relationshipsView"></section>
         <section class="alternate-view hidden" id="assetsView"><div class="section-title"><div><div class="eyebrow">LOCAL ASSET LIBRARY</div><h2>素材库</h2><p class="muted">所有素材只保存在当前电脑。</p></div><button class="primary-button" id="importAssetsBtn">＋ 导入素材</button></div><div class="asset-grid"></div></section>
       </main>
     </div>
     <div class="toast" id="toast">操作已完成</div>
-    <div class="modal hidden" id="previewModal"><div class="modal-backdrop"></div><div class="preview-window"><div class="preview-topbar"><span>▶ 剧本预览</span><button id="closePreview">×</button></div><div class="preview-stage"><div class="preview-scene"><div class="preview-character"></div><div class="preview-dialogue"><b id="previewSpeaker"></b><p id="previewText"></p><div class="preview-options"></div></div></div></div></div></div></div>
+    <div class="modal hidden" id="previewModal">
+      <div class="modal-backdrop"></div>
+      <div class="preview-window">
+        <div class="preview-topbar">
+          <div class="preview-title-copy"><span>▶ 单场景预览</span><small id="previewSceneName">未命名场景</small></div>
+          <div class="preview-topbar-actions"><span id="previewProgress">0 / 0</span><button id="closePreview" type="button">×</button></div>
+        </div>
+        <div class="preview-stage">
+          <div class="preview-scene" id="previewScene" tabindex="0" aria-label="点击继续播放剧本">
+            <div class="preview-scene-location" id="previewSceneLocation"></div>
+            <div class="preview-character preview-character-left no-portrait" id="previewCharacterLeft"></div>
+            <div class="preview-character preview-character-right no-portrait" id="previewCharacterRight"></div>
+            <div class="preview-segment-card hidden" id="previewSegmentCard"><small>场景分段</small><h3 id="previewSegmentTitle"></h3><p id="previewSegmentPerspective"></p></div>
+            <div class="preview-end-card hidden" id="previewEndCard"><small id="previewEndEyebrow">本场景结束</small><h3 id="previewEndTitle"></h3><p id="previewEndHint"></p></div>
+            <div class="preview-dialogue" id="previewDialogue"><b id="previewSpeaker"></b><p id="previewText"></p><div class="preview-options"></div><span class="preview-advance-hint" id="previewAdvanceHint">点击继续</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <script src="./asset-references.js"></script>
     <script src="./app.js"></script>
   </body>
