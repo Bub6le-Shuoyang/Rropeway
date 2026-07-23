@@ -9,6 +9,7 @@
     (project.chapters || []).forEach((chapter) => (chapter.scenes || []).forEach((scene) => {
       if (scene.background === relativePath) { scene.background = ''; referenceCount += 1; }
       (scene.blocks || []).forEach((block) => {
+        if (block.type === 'dialogue' && block.avatar === relativePath) { delete block.avatar; referenceCount += 1; }
         if (block.type === 'dialogue' && block.portrait === relativePath) { delete block.portrait; referenceCount += 1; }
         if (block.type === 'segment' && Array.isArray(block.images)) {
           const remaining = block.images.filter((image) => image.relativePath !== relativePath);
@@ -18,10 +19,12 @@
       });
     }));
     (project.characters || []).forEach((character) => {
-      if (!Array.isArray(character.portraits)) return;
-      const remaining = character.portraits.filter((portrait) => (typeof portrait === 'string' ? portrait : portrait?.relativePath) !== relativePath);
-      referenceCount += character.portraits.length - remaining.length;
-      character.portraits = remaining;
+      ['avatarGroup', 'portraitGroup', 'portraits'].forEach((groupName) => {
+        if (!Array.isArray(character[groupName])) return;
+        const remaining = character[groupName].filter((item) => (typeof item === 'string' ? item : item?.relativePath) !== relativePath);
+        referenceCount += character[groupName].length - remaining.length;
+        character[groupName] = remaining;
+      });
     });
     return referenceCount;
   }
@@ -37,10 +40,11 @@
       add(scene?.background);
       (scene?.blocks || []).forEach((block) => {
         add(block?.portrait);
+        add(block?.avatar);
         (block?.images || []).forEach((image) => add(image?.relativePath));
       });
     }));
-    (project?.characters || []).forEach((character) => (character?.portraits || []).forEach((portrait) => add(typeof portrait === 'string' ? portrait : portrait?.relativePath)));
+    (project?.characters || []).forEach((character) => ['avatarGroup', 'portraitGroup', 'portraits'].forEach((groupName) => (character?.[groupName] || []).forEach((item) => add(typeof item === 'string' ? item : item?.relativePath))));
     return [...references];
   }
 

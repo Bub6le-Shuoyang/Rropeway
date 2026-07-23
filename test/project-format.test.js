@@ -40,10 +40,16 @@ test('素材会保留项目内路径、二次命名和归档标签', () => {
   assert.deepEqual(project.assets[0].tags, ['背景', '夜景']);
 });
 test('角色代表色和默认立绘会被规范化保存', () => {
-  const project = normalizeProject({ characters: [{ name: '角色A', color: '#12abef', portraitPreset: 'short-female', description: '测试角色' }] });
+  const project = normalizeProject({ characters: [{ name: '角色A', color: '#12abef', portraitPreset: 'short-female', description: '测试角色', avatars: ['assets/characters/a/avatars/normal.png'], portraits: [{ id: 'portrait-smile', name: '微笑', alias: '调查状态', relativePath: 'assets/characters/a/portraits/smile.png' }] }] });
   assert.equal(project.characters[0].color, '#12abef');
   assert.equal(project.characters[0].portraitPreset, 'short-female');
   assert.equal(project.characters[0].description, '测试角色');
+  assert.equal(project.characters[0].avatarGroup[0].relativePath, 'assets/characters/a/avatars/normal.png');
+  assert.equal(project.characters[0].portraitGroup[0].name, '微笑');
+  assert.equal(project.characters[0].portraitGroup[0].originalName, '微笑');
+  assert.equal(project.characters[0].portraitGroup[0].alias, '调查状态');
+  assert.equal(project.characters[0].defaultAvatarId, project.characters[0].avatarGroup[0].id);
+  assert.equal(project.characters[0].defaultPortraitId, 'portrait-smile');
 });
 
 test('对白多个状态标签和角色标识会被保存', () => {
@@ -77,10 +83,11 @@ test('分段图片会保存素材引用并过滤无效路径', () => {
 });
 
 test('对白文字格式字段会被保存并校正对齐方式', () => {
-  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', text: '重点', textHtml: '<b>重点</b>', textAlign: 'center', note: '这里需要停顿' }, { type: 'dialogue', text: '码头', textHtml: '<ruby>码头<rt>地点</rt></ruby>' }, { type: 'dialogue', textAlign: 'invalid' }] }] }] });
+  const project = normalizeProject({ chapters: [{ scenes: [{ blocks: [{ type: 'dialogue', text: '重点', textHtml: '<b>重点</b>', textAlign: 'center', note: '这里需要停顿', avatar: 'assets/characters/a/avatars/smile.png' }, { type: 'dialogue', text: '码头', textHtml: '<ruby>码头<rt>地点</rt></ruby>' }, { type: 'dialogue', textAlign: 'invalid' }] }] }] });
   assert.equal(project.chapters[0].scenes[0].blocks[0].textHtml, '<b>重点</b>');
   assert.equal(project.chapters[0].scenes[0].blocks[0].textAlign, 'center');
   assert.equal(project.chapters[0].scenes[0].blocks[0].note, '这里需要停顿');
+  assert.equal(project.chapters[0].scenes[0].blocks[0].avatar, 'assets/characters/a/avatars/smile.png');
   assert.equal(project.chapters[0].scenes[0].blocks[1].textHtml, '<ruby>码头<rt>地点</rt></ruby>');
   assert.equal(project.chapters[0].scenes[0].blocks[2].textAlign, 'left');
 });
@@ -96,4 +103,20 @@ test('玩家选择会迁移旧选项并保存关键节点关联', () => {
   assert.equal(choice.options[0].text, '走海岸');
   assert.equal(choice.options[0].targetBlockId, '');
   assert.deepEqual(choice.options[1], { id: 'option-b', text: '进入隧道', targetBlockId: 'dialogue-key' });
+});
+
+test('角色关系图会保存节点位置并过滤无效关系', () => {
+  const project = normalizeProject({
+    characters: [{ id: 'character-a', name: '角色A' }, { id: 'character-b', name: '角色B' }],
+    relationshipGraph: {
+      positions: { 'character-a': { x: 0.2, y: 0.3 }, missing: { x: 0.5, y: 0.5 } },
+      relationships: [
+        { id: 'relation-a', sourceCharacterId: 'character-a', targetCharacterId: 'character-b', label: '搭档', color: '#12abef' },
+        { sourceCharacterId: 'character-a', targetCharacterId: 'missing' }
+      ]
+    }
+  });
+  assert.deepEqual(project.relationshipGraph.positions['character-a'], { x: 0.2, y: 0.3 });
+  assert.equal(project.relationshipGraph.relationships.length, 1);
+  assert.equal(project.relationshipGraph.relationships[0].label, '搭档');
 });

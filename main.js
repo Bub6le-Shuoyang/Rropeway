@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -110,6 +110,59 @@ async function importAssetFiles(projectPath, imageOnly = false) {
   }
   return imported;
 }
+async function importCharacterMediaFiles(projectPath, characterId, group) {
+  if (!projectPath) throw new Error('请先保存项目，再导入角色素材');
+  if (!['avatars', 'portraits'].includes(group)) throw new Error('角色素材分组无效');
+  const safeCharacterId = String(characterId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!safeCharacterId) throw new Error('角色标识无效');
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: group === 'avatars' ? '导入正方形头像表情' : '导入立绘表情',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+  });
+  if (result.canceled) return [];
+  if (group === 'avatars') {
+    result.filePaths.forEach((source) => {
+      const size = nativeImage.createFromPath(source).getSize();
+      if (!size.width || size.width !== size.height) throw new Error(`头像必须为正方形：${path.basename(source)}`);
+    });
+  }
+  const mediaDir = path.join(path.dirname(projectPath), 'assets', 'characters', safeCharacterId, group);
+  await fs.mkdir(mediaDir, { recursive: true });
+  const imported = [];
+  for (const source of result.filePaths) {
+    const extension = path.extname(source).slice(1).toLowerCase();
+    const safeName = `${crypto.randomUUID()}-${path.basename(source).replace(/[^\w.\-\u4e00-\u9fff]/g, '_')}`;
+    await fs.copyFile(source, path.join(mediaDir, safeName));
+    const relativePath = path.join('assets', 'characters', safeCharacterId, group, safeName).replaceAll('\\', '/');
+    const originalName = path.basename(source, path.extname(source));
+    imported.push({ id: crypto.randomUUID(), name: originalName, originalName, alias: '', relativePath, type: extension });
+  }
+  return imported;
+}
+async function saveCroppedCharacterAvatar(projectPath, characterId, payload) {
+  if (!projectPath) throw new Error('请先保存项目，再生成头像');
+  const safeCharacterId = String(characterId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!safeCharacterId) throw new Error('角色标识无效');
+  const match = String(payload?.dataUrl || '').match(/^data:image\/png;base64,([a-zA-Z0-9+/=]+)$/);
+  if (!match) throw new Error('头像裁剪数据无效');
+  const imageBuffer = Buffer.from(match[1], 'base64');
+  if (!imageBuffer.length || imageBuffer.length > 12 * 1024 * 1024) throw new Error('头像裁剪数据大小无效');
+  const mediaDir = path.join(path.dirname(projectPath), 'assets', 'characters', safeCharacterId, 'avatars');
+  await fs.mkdir(mediaDir, { recursive: true });
+  const requestedName = String(payload?.name || '裁剪头像').trim() || '裁剪头像';
+  const safeBaseName = requestedName.replace(/[^\w\-\u4e00-\u9fff]/g, '_').slice(0, 60) || 'avatar';
+  const fileName = `${crypto.randomUUID()}-${safeBaseName}.png`;
+  await fs.writeFile(path.join(mediaDir, fileName), imageBuffer);
+  return {
+    id: crypto.randomUUID(),
+    name: requestedName,
+    originalName: requestedName,
+    alias: '',
+    relativePath: path.join('assets', 'characters', safeCharacterId, 'avatars', fileName).replaceAll('\\', '/'),
+    type: 'png'
+  };
+}
 async function trashIfExists(target) {
   try { await fs.stat(target); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
   await shell.trashItem(target);
@@ -173,6 +226,8 @@ ipcMain.handle('asset:import', async (_event, { projectPath }) => {
   return importAssetFiles(projectPath, false);
 });
 ipcMain.handle('asset:import-images', async (_event, { projectPath }) => importAssetFiles(projectPath, true));
+ipcMain.handle('character:import-media', async (_event, { projectPath, characterId, group }) => importCharacterMediaFiles(projectPath, characterId, group));
+ipcMain.handle('character:save-cropped-avatar', async (_event, payload) => saveCroppedCharacterAvatar(payload?.projectPath, payload?.characterId, payload));
 ipcMain.handle('asset:delete', async (_event, { projectPath, relativePath }) => {
   const normalizedPath = String(relativePath || '').replaceAll('\\', '/');
   if (!normalizedPath.startsWith('assets/')) throw new Error('只允许删除项目素材目录中的文件');
