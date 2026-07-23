@@ -112,11 +112,15 @@ test('角色关系图会保存节点位置并过滤无效关系', () => {
       positions: { 'character-a': { x: 0.2, y: 0.3 }, missing: { x: 0.5, y: 0.5 } },
       relationships: [
         { id: 'relation-a', sourceCharacterId: 'character-a', targetCharacterId: 'character-b', label: '搭档', color: '#12abef' },
+        { id: 'relation-b', sourceCharacterId: 'character-b', targetCharacterId: 'character-a', label: '信任', color: '#f2674f' },
         { sourceCharacterId: 'character-a', targetCharacterId: 'missing' }
       ]
     }
   });
   assert.deepEqual(project.relationshipGraph.positions['character-a'], { x: 0.2, y: 0.3 });
-  assert.equal(project.relationshipGraph.relationships.length, 1);
+  assert.equal(project.relationshipGraph.relationships.length, 2);
   assert.equal(project.relationshipGraph.relationships[0].label, '搭档');
+  assert.equal(project.relationshipGraph.relationships[1].label, '信任');
+  assert.equal(project.relationshipGraph.relationships[1].sourceCharacterId, 'character-b');
+  assert.equal(project.relationshipGraph.relationships[1].targetCharacterId, 'character-a');
 });

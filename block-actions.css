@@ -1410,6 +1410,7 @@ body[data-theme="dark"] .script-block.dialogue .dialogue-avatar {
 .relationship-heading-copy { display: flex; align-items: center; gap: 14px; }
 .relationship-heading h2 { margin: 0; font: 400 26px Georgia, serif; }
 .relationship-heading .eyebrow { margin-bottom: 4px; }
+.relationship-heading-actions { display: flex; align-items: center; gap: 10px; }
 
 .relationship-back {
   width: 34px;
@@ -1419,10 +1420,36 @@ body[data-theme="dark"] .script-block.dialogue .dialogue-avatar {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  font-size: 22px;
+  font-size: 20px;
+  line-height: 1;
 }
 
 .relationship-back:hover { background: var(--accent-soft); color: var(--accent); }
+
+.relationship-zoom-controls {
+  height: 34px;
+  display: grid;
+  grid-template-columns: 32px 54px 32px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.relationship-zoom-button,
+.relationship-zoom-value {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.relationship-zoom-button { font-size: 18px; }
+.relationship-zoom-value { border-right: 1px solid var(--line); border-left: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.relationship-zoom-button:hover,
+.relationship-zoom-value:hover { background: var(--accent-soft); color: var(--accent); }
+.relationship-zoom-button:disabled { color: color-mix(in srgb, var(--muted) 42%, transparent); cursor: default; }
 
 .relationship-surface {
   position: relative;
@@ -1430,7 +1457,7 @@ body[data-theme="dark"] .script-block.dialogue .dialogue-avatar {
   min-height: 520px;
   overflow: hidden;
   background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
-  background-size: 28px 28px;
+  background-size: var(--relationship-grid-size, 28px) var(--relationship-grid-size, 28px);
   background-position: -1px -1px;
 }
 
@@ -1455,11 +1482,24 @@ body[data-theme="dark"] .script-block.dialogue .dialogue-avatar {
   content: "";
   position: absolute;
   left: 0;
-  right: 0;
+  right: 7px;
   top: 7px;
   height: 2px;
   border-radius: 2px;
   background: var(--relationship-color, var(--accent));
+}
+
+.relationship-edge::before,
+.relationship-edge-preview::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid var(--relationship-color, var(--accent));
 }
 
 .relationship-edge:hover::after,
@@ -1468,7 +1508,7 @@ body[data-theme="dark"] .script-block.dialogue .dialogue-avatar {
 
 .relationship-edge-label {
   position: absolute;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--relationship-label-scale, 1));
   max-width: 150px;
   overflow: hidden;
   padding: 4px 8px;
@@ -1499,7 +1539,8 @@ body[data-theme="dark"] .script-block.dialogue .dialogue-avatar {
   background: var(--panel);
   box-shadow: 0 8px 22px rgba(52, 49, 44, .09);
   cursor: grab;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--relationship-node-scale, 1));
+  transform-origin: center;
   pointer-events: auto;
   user-select: none;
   touch-action: none;
@@ -3534,10 +3575,14 @@ body[data-theme="dark"] .segment-image-inspector-row img { background:#403b37; }
   height: 22px;
   flex: 0 0 auto;
   place-items: center;
+  overflow: hidden;
   border-radius: 6px;
   font-size: 10px;
   font-weight: 800;
 }
+
+.dialogue-character-picker-avatar-image,
+.dialogue-character-option-avatar-image { width: 100%; height: 100%; object-fit: cover; }
 
 .dialogue-character-picker-label {
   min-width: 0;
@@ -3622,6 +3667,7 @@ body[data-theme="dark"] .segment-image-inspector-row img { background:#403b37; }
   width: 34px;
   height: 34px;
   place-items: center;
+  overflow: hidden;
   border-radius: 9px;
   font-size: 11px;
   font-weight: 800;
