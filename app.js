@@ -794,8 +794,11 @@ function createBlockElement(block, index) {
   wrapper.dataset.blockId = block.id || createContentId(block.type || 'block');
   block.id = wrapper.dataset.blockId;
   const actions = addChild(wrapper, 'div', 'block-actions');
-  const remove = addChild(actions, 'button', 'block-action delete', '\u00d7');
-  remove.type = 'button'; remove.title = '\u5220\u9664'; remove.dataset.blockAction = 'delete';
+  const segmentHasImages = block.type === 'segment' && Array.isArray(block.images) && block.images.length > 0;
+  if (!segmentHasImages) {
+    const remove = addChild(actions, 'button', 'block-action delete', '\u00d7');
+    remove.type = 'button'; remove.title = block.type === 'segment' ? '删除分段' : '\u5220\u9664'; remove.dataset.blockAction = 'delete';
+  }
   addChild(wrapper, 'div', 'block-handle', '⠿');
   const content = node('div', 'block-content');
   if (block.type === 'segment') {
@@ -814,6 +817,8 @@ function createBlockElement(block, index) {
       images.forEach((image) => {
         const figure = addChild(track, 'figure', 'segment-image-card segment-image-slide');
         const imageNode = addChild(figure, 'img'); imageNode.alt = image.name || '分段图片';
+        const removeSegment = addChild(figure, 'button', 'segment-image-remove', '×'); removeSegment.type = 'button'; removeSegment.title = '删除分段'; removeSegment.setAttribute('aria-label', '删除分段');
+        removeSegment.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); deleteBlock(index); });
         addChild(figure, 'figcaption', '', image.name || '未命名图片');
         if (desktopState.filePath && image.relativePath) desktopApi.readAsset(desktopState.filePath, image.relativePath).then((src) => { if (src) imageNode.src = src; }).catch(() => figure.classList.add('asset-missing'));
       });
@@ -916,7 +921,8 @@ function renderScene() {
   selectedBlockIndex = Math.min(selectedBlockIndex, Math.max(0, (scene.blocks || []).length - 1));
   document.getElementById('sceneTitle').textContent = scene.title;
   document.getElementById('sceneSummary').textContent = scene.blocks?.length ? `${scene.blocks.length} 个内容块` : '空白场景';
-  document.querySelector('.breadcrumb strong').textContent = `第 ${activeChapterIndex + 1} 章 · ${scene.title}`;
+  const breadcrumbTitle = document.getElementById('breadcrumbSceneTitle');
+  if (breadcrumbTitle) { breadcrumbTitle.classList.remove('editing'); breadcrumbTitle.textContent = `第 ${activeChapterIndex + 1} 章 · ${scene.title}`; }
 }
 function renderSceneTabs() {
   const tabs = document.querySelector('.scene-tabs'); tabs.replaceChildren(); const scenes = currentChapter()?.scenes || [];
@@ -925,6 +931,59 @@ function renderSceneTabs() {
 }
 function activateScene(index) { syncCurrentScene(); activeSceneIndex = index; selectedBlockIndex = 0; renderSceneTabs(); renderScene(); }
 async function renameScene(index) { const scene = currentChapter()?.scenes?.[index]; if (!scene) return; const title = await requestTextInput('场景名称', scene.title); if (title) { scene.title = title; renderSceneTabs(); renderScene(); markDirty(); } }
+function resizeBreadcrumbSceneInput(input) {
+  input.style.width = `${Math.max(96, Math.min(360, Array.from(input.value || '').length * 14 + 24))}px`;
+}
+function previewBreadcrumbSceneTitle(value) {
+  const title = String(value || '').trim() || '未命名场景';
+  const editorTitle = document.getElementById('sceneTitle');
+  const activeSceneTab = document.querySelector('.scene-tab.active span');
+  const activeSceneFile = document.querySelector('.chapter-scene-file.active .scene-file-name');
+  if (editorTitle) editorTitle.textContent = title;
+  if (activeSceneTab) activeSceneTab.textContent = title;
+  if (activeSceneFile) activeSceneFile.textContent = title;
+}
+function beginBreadcrumbSceneRename() {
+  const detail = document.getElementById('breadcrumbSceneTitle');
+  const scene = currentScene();
+  if (!detail || !scene || detail.classList.contains('editing') || document.querySelector('.editor-layout')?.classList.contains('hidden')) return;
+  detail.classList.add('editing');
+  detail.replaceChildren();
+  addChild(detail, 'span', 'breadcrumb-chapter-prefix', `第 ${activeChapterIndex + 1} 章 ·`);
+  const input = addChild(detail, 'input', 'breadcrumb-scene-input'); input.type = 'text'; input.value = scene.title; input.maxLength = 80; input.setAttribute('aria-label', '当前场景名称');
+  resizeBreadcrumbSceneInput(input);
+  let finished = false;
+  const finish = (save) => {
+    if (finished) return;
+    finished = true;
+    const nextTitle = input.value.trim();
+    if (save && nextTitle && nextTitle !== scene.title) {
+      scene.title = nextTitle;
+      renderChapters();
+      renderSceneTabs();
+      renderScene();
+      markDirty();
+      showToast('场景名称已更新');
+      return;
+    }
+    renderScene();
+  };
+  input.addEventListener('input', () => { resizeBreadcrumbSceneInput(input); previewBreadcrumbSceneTitle(input.value); });
+  input.addEventListener('click', (event) => event.stopPropagation());
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
+    if (event.key === 'Escape') { event.preventDefault(); previewBreadcrumbSceneTitle(scene.title); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  requestAnimationFrame(() => {
+    input.focus({ preventScroll: true });
+    const caretPosition = input.value.length;
+    input.setSelectionRange(caretPosition, caretPosition);
+  });
+}
+const breadcrumbSceneTitle = document.getElementById('breadcrumbSceneTitle');
+breadcrumbSceneTitle?.addEventListener('click', beginBreadcrumbSceneRename);
+breadcrumbSceneTitle?.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); beginBreadcrumbSceneRename(); } });
 function addScene() { syncCurrentScene(); const chapter = currentChapter(); chapter.scenes.push({ id: `scene-${Date.now()}`, number: String(chapter.scenes.length + 1).padStart(2, '0'), title: `未命名场景 ${chapter.scenes.length + 1}`, blocks: [] }); activeSceneIndex = chapter.scenes.length - 1; selectedBlockIndex = 0; renderSceneTabs(); renderScene(); markDirty(); showToast('已添加新场景'); }
 function normalizeSceneNumbers(chapter) { chapter.scenes.forEach((scene, sceneIndex) => { scene.number = String(sceneIndex + 1).padStart(2, '0'); }); }
 function closeTreeContextMenu() { document.querySelector('.tree-context-menu')?.remove(); }
@@ -1988,6 +2047,13 @@ const IMAGE_ASSET_TYPES = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
 function segmentImageFromAsset(asset) {
   return { id: `segment-image-${Date.now()}-${Math.random().toString(16).slice(2)}`, assetId: asset.id || '', name: asset.name || '未命名图片', relativePath: asset.relativePath };
 }
+function removeSegmentImage(segmentId, imageIndex) {
+  syncCurrentScene();
+  const segment = currentScene()?.blocks?.find((block) => block.id === segmentId && block.type === 'segment');
+  if (!segment?.images?.[imageIndex]) return;
+  segment.images.splice(imageIndex, 1);
+  refreshSegmentImages('已从分段移除图片');
+}
 function refreshSegmentImages(message) {
   renderScene();
   renderInspector();
@@ -2014,16 +2080,17 @@ function renderSegmentImageSettings(section, segment) {
   const list = addChild(imageGroup, 'div', 'segment-image-inspector-list');
   segment.images.forEach((image, imageIndex) => {
     const row = addChild(list, 'div', 'segment-image-inspector-row');
-    const thumbnail = addChild(row, 'img'); thumbnail.alt = image.name || '分段图片';
+    const preview = addChild(row, 'div', 'segment-image-inspector-preview');
+    const thumbnail = addChild(preview, 'img'); thumbnail.alt = image.name || '分段图片';
+    const previewRemove = addChild(preview, 'button', 'segment-image-inspector-remove', '×'); previewRemove.type = 'button'; previewRemove.title = '移除分段图片'; previewRemove.setAttribute('aria-label', `移除分段图片 ${image.name || imageIndex + 1}`);
+    previewRemove.addEventListener('click', () => removeSegmentImage(segment.id, imageIndex));
     if (desktopState.filePath && image.relativePath) desktopApi.readAsset(desktopState.filePath, image.relativePath).then((src) => { if (src) thumbnail.src = src; }).catch(() => row.classList.add('asset-missing'));
     const copy = addChild(row, 'div', 'segment-image-inspector-copy'); addChild(copy, 'b', '', image.name || '未命名图片'); addChild(copy, 'small', '', `${imageIndex + 1} / ${segment.images.length}`);
     const actions = addChild(row, 'div', 'segment-image-inspector-actions');
     const up = addChild(actions, 'button', '', '↑'); up.type = 'button'; up.title = '前移'; up.disabled = imageIndex === 0;
     const down = addChild(actions, 'button', '', '↓'); down.type = 'button'; down.title = '后移'; down.disabled = imageIndex === segment.images.length - 1;
-    const remove = addChild(actions, 'button', 'danger', '×'); remove.type = 'button'; remove.title = '移除';
     up.addEventListener('click', () => { const [moved] = segment.images.splice(imageIndex, 1); segment.images.splice(imageIndex - 1, 0, moved); refreshSegmentImages('图片顺序已调整'); });
     down.addEventListener('click', () => { const [moved] = segment.images.splice(imageIndex, 1); segment.images.splice(imageIndex + 1, 0, moved); refreshSegmentImages('图片顺序已调整'); });
-    remove.addEventListener('click', () => { segment.images.splice(imageIndex, 1); refreshSegmentImages('已从分段移除图片'); });
   });
   const actions = addChild(imageGroup, 'div', 'segment-image-source-actions');
   const localButton = addChild(actions, 'button', 'file-button', '从本地选择'); localButton.type = 'button'; localButton.addEventListener('click', () => importImagesIntoSegment(segment));
@@ -2349,9 +2416,10 @@ function renderCharacters() {
     const info = addChild(cardCopy, 'div');
     addChild(info, 'h3', '', character.name);
     addChild(info, 'p', '', character.role || '未设置定位');
-    const colorDot = addChild(cardCopy, 'span', 'color-dot'); colorDot.style.background = character.color || '#f2674f';
+    const cardMeta = addChild(cardCopy, 'div', 'character-card-meta');
+    addChild(cardMeta, 'span', 'character-media-counts', `头像 ${characterMediaGroup(character, 'avatarGroup').length} · 立绘 ${characterMediaGroup(character, 'portraitGroup').length}`);
+    const colorDot = addChild(cardMeta, 'span', 'color-dot'); colorDot.style.background = character.color || '#f2674f'; colorDot.title = '角色代表色';
     if (character.description) addChild(card, 'p', 'character-description', character.description);
-    addChild(card, 'div', 'character-media-counts', `头像 ${characterMediaGroup(character, 'avatarGroup').length} · 立绘 ${characterMediaGroup(character, 'portraitGroup').length}`);
     const footer = addChild(card, 'div', 'card-foot');
     const media = addChild(footer, 'button', 'character-card-action', '头像与立绘');
     const edit = addChild(footer, 'button', 'character-card-action', '编辑信息');
