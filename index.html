@@ -18,11 +18,13 @@
           <button class="nav-item active" data-view="editor" title="剧本编辑器"><span>▤</span>剧本编辑器</button>
           <button class="nav-item" data-view="characters" title="角色与立绘"><span>♧</span>角色与立绘</button>
           <button class="nav-item" data-view="assets" title="素材库"><span>▧</span>素材库</button>
+          <button class="nav-item" data-view="checks" title="写作检查"><span>✓</span>写作检查</button>
+          <button class="nav-item" data-view="flow" title="流程图"><span>⌘</span>流程图</button>
         </nav>
         <div class="sidebar-section-title"><span>项目大纲</span><button class="tiny-add" id="addChapter" title="新建章节">＋</button></div>
         <div class="chapter-list" id="chapterList"></div><div class="sidebar-bottom">
           <button class="sidebar-collapse-toggle" id="sidebarCollapseButton" type="button" title="收起左侧栏" aria-label="收起左侧栏">‹</button>
-          <div class="sync-status"><span id="projectLocationStatus">本地新项目</span><span class="save-separator">·</span><span id="saveStatus">未保存</span><span class="sidebar-version" id="appVersion">v0.4.0</span></div>
+          <div class="sync-status"><span id="projectLocationStatus">本地新项目</span><span class="save-separator">·</span><span id="saveStatus">未保存</span><span class="sidebar-version" id="appVersion">v0.10.0</span></div>
         </div>
       </aside>
 
@@ -83,6 +85,8 @@
         <section class="alternate-view hidden" id="charactersView"></section>
         <section class="alternate-view hidden" id="relationshipsView"></section>
         <section class="alternate-view hidden" id="assetsView"><div class="section-title"><div><div class="eyebrow">LOCAL ASSET LIBRARY</div><h2>素材库</h2><p class="muted">所有素材只保存在当前电脑。</p></div><button class="primary-button" id="importAssetsBtn">＋ 导入素材</button></div><div class="asset-grid"></div></section>
+        <section class="alternate-view hidden" id="writingChecksView"></section>
+        <section class="alternate-view hidden" id="sceneFlowView"></section>
       </main>
     </div>
     <div class="toast" id="toast">操作已完成</div>
@@ -90,7 +94,7 @@
       <div class="modal-backdrop"></div>
       <div class="preview-window">
         <div class="preview-topbar">
-          <div class="preview-title-copy"><span>▶ 单场景预览</span><small id="previewSceneName">未命名场景</small></div>
+          <div class="preview-title-copy"><span>▶ 当前章节预览</span><small id="previewSceneName">未命名场景</small></div>
           <div class="preview-topbar-actions"><span id="previewProgress">0 / 0</span><button id="closePreview" type="button">×</button></div>
         </div>
         <div class="preview-stage">
@@ -106,6 +110,8 @@
       </div>
     </div>
     <script src="./asset-references.js"></script>
+    <script src="./story-flow.js"></script>
+    <script src="./writing-checks.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

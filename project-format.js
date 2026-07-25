@@ -1,3 +1,5 @@
+const { normalizeSceneFlow } = require('./story-flow');
+
 const DEFAULT_PROJECT = {
   format: 'scriptroom-project',
   version: 1,
@@ -8,6 +10,7 @@ const DEFAULT_PROJECT = {
     scenes: [{ id: 'scene-1', number: '01', title: '未命名场景', blocks: [] }]
   }],
   characters: [],
+  relationshipGraph: { positions: {}, relationships: [], notes: [], viewport: { centerX: 0.5, centerY: 0.5, zoom: 1 } },
   assets: [],
   updatedAt: new Date().toISOString()
 };
@@ -92,12 +95,13 @@ function normalizeScene(scene, index) {
 function normalizeRelationshipGraph(graph, characters) {
   const value = graph && typeof graph === 'object' ? graph : {};
   const characterIds = new Set(characters.map((character) => character.id));
+  const finiteNumber = (input, fallback) => Number.isFinite(Number(input)) ? Number(input) : fallback;
   const positions = {};
   Object.entries(value.positions && typeof value.positions === 'object' ? value.positions : {}).forEach(([characterId, position]) => {
     if (!characterIds.has(characterId)) return;
     positions[characterId] = {
-      x: Math.min(0.92, Math.max(0.08, Number.isFinite(Number(position?.x)) ? Number(position.x) : 0.5)),
-      y: Math.min(0.88, Math.max(0.12, Number.isFinite(Number(position?.y)) ? Number(position.y) : 0.5))
+      x: finiteNumber(position?.x, 0.5),
+      y: finiteNumber(position?.y, 0.5)
     };
   });
   const relationships = (Array.isArray(value.relationships) ? value.relationships : []).map((relationship, index) => ({
@@ -107,7 +111,20 @@ function normalizeRelationshipGraph(graph, characters) {
     label: String(relationship?.label || '关系'),
     color: /^#[0-9a-f]{6}$/i.test(relationship?.color || '') ? relationship.color : '#f2674f'
   })).filter((relationship) => relationship.sourceCharacterId !== relationship.targetCharacterId && characterIds.has(relationship.sourceCharacterId) && characterIds.has(relationship.targetCharacterId));
-  return { positions, relationships };
+  const notes = (Array.isArray(value.notes) ? value.notes : []).map((note, index) => ({
+    id: String(note?.id || `relationship-note-${Date.now()}-${index}`),
+    text: String(note?.text || ''),
+    color: /^#[0-9a-f]{6}$/i.test(note?.color || '') ? note.color : '#fff1a8',
+    x: finiteNumber(note?.x, 0.5),
+    y: finiteNumber(note?.y, 0.5)
+  }));
+  const viewportValue = value.viewport && typeof value.viewport === 'object' ? value.viewport : {};
+  const viewport = {
+    centerX: finiteNumber(viewportValue.centerX, 0.5),
+    centerY: finiteNumber(viewportValue.centerY, 0.5),
+    zoom: Math.min(2.5, Math.max(0.3, finiteNumber(viewportValue.zoom, 1)))
+  };
+  return { positions, relationships, notes, viewport };
 }
 function normalizeProject(input) {
   const value = input && typeof input === 'object' ? input : {};
@@ -123,6 +140,7 @@ function normalizeProject(input) {
   };
   if (!normalized.chapters.length) normalized.chapters.push({ id: `chapter-${Date.now()}`, title: '第一章', status: '草稿', scenes: [] });
   normalized.chapters.forEach((chapter, chapterIndex) => { if (!chapter.scenes.length) chapter.scenes.push(normalizeScene({}, chapterIndex)); });
+  normalized.sceneFlow = normalizeSceneFlow(value.sceneFlow, normalized.chapters);
   return normalized;
 }
 module.exports = { DEFAULT_PROJECT, clone, normalizeProject };

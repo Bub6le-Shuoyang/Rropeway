@@ -240,6 +240,10 @@ ipcMain.handle('asset:read', async (_event, { projectPath, relativePath }) => {
   if (!mime) return null;
   return `data:${mime};base64;${(await fs.readFile(filePath)).toString('base64')}`.replace('base64;', 'base64,');
 });
+ipcMain.handle('asset:exists', async (_event, { projectPath, relativePath }) => {
+  try { return (await fs.stat(projectAssetPath(projectPath, relativePath))).isFile(); }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+});
 ipcMain.handle('shell:show-item', async (_event, { projectPath, relativePath }) => shell.showItemInFolder(projectAssetPath(projectPath, relativePath)));
 ipcMain.handle('shell:open-project-folder', async (_event, filePath) => {
   const directory = projectDirectory(filePath);

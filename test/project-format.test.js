@@ -105,22 +105,43 @@ test('玩家选择会迁移旧选项并保存关键节点关联', () => {
   assert.deepEqual(choice.options[1], { id: 'option-b', text: '进入隧道', targetBlockId: 'dialogue-key' });
 });
 
-test('角色关系图会保存节点位置并过滤无效关系', () => {
+test('角色关系图会保存无限坐标、便签和视口并过滤无效关系', () => {
   const project = normalizeProject({
     characters: [{ id: 'character-a', name: '角色A' }, { id: 'character-b', name: '角色B' }],
     relationshipGraph: {
-      positions: { 'character-a': { x: 0.2, y: 0.3 }, missing: { x: 0.5, y: 0.5 } },
+      positions: { 'character-a': { x: -0.4, y: 1.7 }, missing: { x: 0.5, y: 0.5 } },
       relationships: [
         { id: 'relation-a', sourceCharacterId: 'character-a', targetCharacterId: 'character-b', label: '搭档', color: '#12abef' },
         { id: 'relation-b', sourceCharacterId: 'character-b', targetCharacterId: 'character-a', label: '信任', color: '#f2674f' },
         { sourceCharacterId: 'character-a', targetCharacterId: 'missing' }
-      ]
+      ],
+      notes: [{ id: 'note-a', text: '第二幕揭示真实动机', color: '#dff3cf', x: 1.25, y: -0.3 }],
+      viewport: { centerX: 0.8, centerY: -0.2, zoom: 2.2 }
     }
   });
-  assert.deepEqual(project.relationshipGraph.positions['character-a'], { x: 0.2, y: 0.3 });
+  assert.deepEqual(project.relationshipGraph.positions['character-a'], { x: -0.4, y: 1.7 });
   assert.equal(project.relationshipGraph.relationships.length, 2);
   assert.equal(project.relationshipGraph.relationships[0].label, '搭档');
   assert.equal(project.relationshipGraph.relationships[1].label, '信任');
   assert.equal(project.relationshipGraph.relationships[1].sourceCharacterId, 'character-b');
   assert.equal(project.relationshipGraph.relationships[1].targetCharacterId, 'character-a');
+  assert.deepEqual(project.relationshipGraph.notes[0], { id: 'note-a', text: '第二幕揭示真实动机', color: '#dff3cf', x: 1.25, y: -0.3 });
+  assert.deepEqual(project.relationshipGraph.viewport, { centerX: 0.8, centerY: -0.2, zoom: 2.2 });
+});
+
+test('项目会保存跨章节的场景预览流程', () => {
+  const project = normalizeProject({
+    chapters: [
+      { id: 'chapter-a', scenes: [{ id: 'scene-a', blocks: [] }, { id: 'scene-b', blocks: [] }] },
+      { id: 'chapter-b', scenes: [{ id: 'scene-c', blocks: [] }] }
+    ],
+    sceneFlow: {
+      startSceneId: 'scene-c',
+      positions: { 'scene-c': { x: 1.3, y: -0.4 } },
+      transitions: [{ sourceSceneId: 'scene-c', targetSceneId: 'scene-a' }, { sourceSceneId: 'scene-a', targetSceneId: 'scene-b' }]
+    }
+  });
+  assert.equal(project.sceneFlow.startSceneId, 'scene-c');
+  assert.deepEqual(project.sceneFlow.positions['scene-c'], { x: 1.3, y: -0.4 });
+  assert.deepEqual(project.sceneFlow.transitions, [{ sourceSceneId: 'scene-c', targetSceneId: 'scene-a' }, { sourceSceneId: 'scene-a', targetSceneId: 'scene-b' }]);
 });

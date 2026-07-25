@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('scriptroom', {
   saveCroppedAvatar: (projectPath, characterId, payload) => ipcRenderer.invoke('character:save-cropped-avatar', { projectPath, characterId, ...payload }),
   deleteAsset: (projectPath, relativePath) => ipcRenderer.invoke('asset:delete', { projectPath, relativePath }),
   readAsset: (projectPath, relativePath) => ipcRenderer.invoke('asset:read', { projectPath, relativePath }),
+  assetExists: (projectPath, relativePath) => ipcRenderer.invoke('asset:exists', { projectPath, relativePath }),
   showItem: (projectPath, relativePath) => ipcRenderer.invoke('shell:show-item', { projectPath, relativePath }),
   openProjectFolder: (filePath) => ipcRenderer.invoke('shell:open-project-folder', filePath),
   setDirty: (dirty) => ipcRenderer.send('window:set-dirty', dirty),

@@ -1,7 +1,9 @@
 const desktopApi = window.scriptroom;
+const storyFlowTools = window.RropewayStoryFlow;
+const writingCheckTools = window.RropewayWritingChecks;
 desktopApi?.getVersion?.().then((version) => { const label = document.getElementById('appVersion'); if (label) label.textContent = `v${version}`; }).catch(() => {});
 const navItems = document.querySelectorAll('.nav-item');
-const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), relationships: document.getElementById('relationshipsView'), assets: document.getElementById('assetsView'), home: document.getElementById('projectHomeView') };
+const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), relationships: document.getElementById('relationshipsView'), assets: document.getElementById('assetsView'), checks: document.getElementById('writingChecksView'), flow: document.getElementById('sceneFlowView'), home: document.getElementById('projectHomeView') };
 const toast = document.getElementById('toast');
 let desktopState = { filePath: null, data: null, dirty: false };
 const LAST_PROJECT_STORAGE_KEY = 'scriptroom-last-project';
@@ -24,9 +26,15 @@ let previewState = null;
 let previewRenderToken = 0;
 let selectedRelationshipId = '';
 let relationshipResizeObserver = null;
+let sceneFlowResizeObserver = null;
+let writingCheckRenderToken = 0;
+let writingCheckFilter = 'all';
+const MIN_SCENE_FLOW_ZOOM = 0.35;
+const MAX_SCENE_FLOW_ZOOM = 2.2;
 const RELATIONSHIP_ZOOM_STORAGE_KEY = 'rropeway-relationship-zoom';
-const MIN_RELATIONSHIP_ZOOM = 0.7;
-const MAX_RELATIONSHIP_ZOOM = 1.4;
+const MIN_RELATIONSHIP_ZOOM = 0.3;
+const MAX_RELATIONSHIP_ZOOM = 2.5;
+const RELATIONSHIP_NOTE_COLORS = ['#fff1a8', '#dff3cf', '#d9eff7', '#ffd9cf', '#eadffd'];
 function clampRelationshipZoom(value) { return Math.round(Math.min(MAX_RELATIONSHIP_ZOOM, Math.max(MIN_RELATIONSHIP_ZOOM, Number(value) || 1)) * 10) / 10; }
 let relationshipZoom = clampRelationshipZoom(localStorage.getItem(RELATIONSHIP_ZOOM_STORAGE_KEY));
 const normalizedAvatarSourceCache = new Map();
@@ -725,13 +733,18 @@ function criticalDialogueNodes() {
 function navigateToDialogueNode(blockId) {
   const target = criticalDialogueNodes().find((item) => item.id === blockId);
   if (!target) { showToast('关联的关键节点不存在或已取消“关键节点”状态'); return; }
+  navigateToProjectBlock(target.chapterIndex, target.sceneIndex, target.blockIndex);
+}
+function navigateToProjectBlock(chapterIndex, sceneIndex, blockIndex = 0) {
+  if (!desktopState.data?.chapters?.[chapterIndex]?.scenes?.[sceneIndex]) return;
   syncCurrentScene();
-  activeChapterIndex = target.chapterIndex;
-  activeSceneIndex = target.sceneIndex;
-  selectedBlockIndex = target.blockIndex;
-  expandedChapterIds.add(desktopState.data.chapters[target.chapterIndex].id);
+  activeChapterIndex = chapterIndex;
+  activeSceneIndex = sceneIndex;
+  selectedBlockIndex = Math.max(0, blockIndex);
+  expandedChapterIds.add(desktopState.data.chapters[chapterIndex].id);
+  document.querySelector('[data-view="editor"]')?.click();
   renderChapters(); renderSceneTabs(); renderScene(); renderInspector();
-  requestAnimationFrame(() => document.querySelector(`.script-block[data-block-index="${target.blockIndex}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  requestAnimationFrame(() => document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
 }
 function closeCriticalNodePickers(except = null) {
   document.querySelectorAll('.choice-target-picker.open').forEach((picker) => { if (picker !== except) picker.classList.remove('open'); });
@@ -1468,6 +1481,7 @@ function renderPreviewPortrait(element, side, spec, speaking, renderToken) {
   if (!spec) return;
   element.title = spec.name || '';
   if (spec.portrait && desktopState.filePath) {
+    element.classList.add('asset-portrait');
     desktopApi.readAsset(desktopState.filePath, spec.portrait).then((src) => {
       if (!src || renderToken !== previewRenderToken) return;
       element.style.background = `center bottom / contain no-repeat url("${src}")`;
@@ -1479,13 +1493,13 @@ function renderPreviewPortrait(element, side, spec, speaking, renderToken) {
   if (spec.name) addChild(element, 'span', 'preview-character-name', spec.name);
 }
 function nextPreviewSceneLocation() {
-  const chapters = desktopState.data?.chapters || [];
-  const chapter = chapters[previewState.chapterIndex];
-  if (chapter?.scenes?.[previewState.sceneIndex + 1]) return { chapterIndex: previewState.chapterIndex, sceneIndex: previewState.sceneIndex + 1 };
-  for (let chapterIndex = previewState.chapterIndex + 1; chapterIndex < chapters.length; chapterIndex += 1) {
-    if (chapters[chapterIndex]?.scenes?.length) return { chapterIndex, sceneIndex: 0 };
+  if (previewState?.followSceneFlow) {
+    const scene = previewSceneData();
+    const transition = ensureSceneFlow().transitions.find((item) => item.sourceSceneId === scene?.id);
+    return transition ? sceneFlowLocation(transition.targetSceneId) : null;
   }
-  return null;
+  const chapters = desktopState.data?.chapters || [];
+  return storyFlowTools.nextSequentialSceneLocation(chapters, previewState.chapterIndex, previewState.sceneIndex, previewState.scope === 'chapter');
 }
 function previewLocationForBlockId(blockId) {
   for (let chapterIndex = 0; chapterIndex < (desktopState.data?.chapters || []).length; chapterIndex += 1) {
@@ -1497,15 +1511,31 @@ function previewLocationForBlockId(blockId) {
   }
   return null;
 }
-function setPreviewScene(location) {
-  previewState = { chapterIndex: location.chapterIndex, sceneIndex: location.sceneIndex, blockIndex: location.blockIndex || 0, mode: 'playing' };
+function previewLocationInScope(location) {
+  return previewState?.scope !== 'chapter' || location?.chapterIndex === previewState.scopeChapterIndex;
+}
+function setPreviewScene(location, options = {}) {
+  previewState = { ...options, chapterIndex: location.chapterIndex, sceneIndex: location.sceneIndex, blockIndex: location.blockIndex || 0, mode: 'playing' };
   if (!(previewSceneData()?.blocks || []).length) previewState.mode = 'scene-end';
   renderPreviewFrame();
 }
 function closeScenePreview() { document.getElementById('previewModal')?.classList.add('hidden'); previewState = null; previewRenderToken += 1; }
 function startScenePreview() {
   syncCurrentScene();
-  setPreviewScene({ chapterIndex: activeChapterIndex, sceneIndex: activeSceneIndex, blockIndex: 0 });
+  const chapter = desktopState.data?.chapters?.[activeChapterIndex];
+  const firstSceneIndex = chapter?.scenes?.length ? 0 : activeSceneIndex;
+  document.querySelector('.preview-title-copy span').textContent = '▶ 当前章节预览';
+  setPreviewScene({ chapterIndex: activeChapterIndex, sceneIndex: firstSceneIndex, blockIndex: 0 }, { followSceneFlow: false, scope: 'chapter', scopeChapterIndex: activeChapterIndex });
+  document.getElementById('previewModal')?.classList.remove('hidden');
+  requestAnimationFrame(() => document.getElementById('previewScene')?.focus());
+}
+function startProjectFlowPreview() {
+  syncCurrentScene();
+  const graph = ensureSceneFlow();
+  const location = sceneFlowLocation(graph.startSceneId);
+  if (!location) { showToast('流程图中没有可预览的起点场景'); return; }
+  document.querySelector('.preview-title-copy span').textContent = '▶ 完整流程预览';
+  setPreviewScene(location, { followSceneFlow: true, scope: 'project' });
   document.getElementById('previewModal')?.classList.remove('hidden');
   requestAnimationFrame(() => document.getElementById('previewScene')?.focus());
 }
@@ -1514,7 +1544,8 @@ function advanceScenePreview(fromChoice = false) {
   if (previewState.mode === 'project-end') { closeScenePreview(); return; }
   if (previewState.mode === 'scene-end') {
     const nextScene = nextPreviewSceneLocation();
-    if (nextScene) setPreviewScene(nextScene); else { previewState.mode = 'project-end'; renderPreviewFrame(); }
+    if (nextScene) setPreviewScene(nextScene, { followSceneFlow: previewState.followSceneFlow, scope: previewState.scope, scopeChapterIndex: previewState.scopeChapterIndex });
+    else closeScenePreview();
     return;
   }
   if (previewBlockData()?.type === 'choice' && !fromChoice) return;
@@ -1548,8 +1579,9 @@ function renderPreviewFrame() {
   if (previewState.mode !== 'playing') {
     dialogue.classList.add('hidden'); endCard.classList.remove('hidden');
     const nextScene = previewState.mode === 'scene-end' ? nextPreviewSceneLocation() : null;
-    document.getElementById('previewEndEyebrow').textContent = previewState.mode === 'scene-end' ? '本场景结束' : '预览结束';
-    document.getElementById('previewEndTitle').textContent = nextScene ? desktopState.data.chapters[nextScene.chapterIndex].scenes[nextScene.sceneIndex].title : '已经到达项目末尾';
+    const chapterComplete = previewState.scope === 'chapter' && !nextScene;
+    document.getElementById('previewEndEyebrow').textContent = nextScene ? '本场景结束' : chapterComplete ? '本章节结束' : '完整预览结束';
+    document.getElementById('previewEndTitle').textContent = nextScene ? desktopState.data.chapters[nextScene.chapterIndex].scenes[nextScene.sceneIndex].title : chapterComplete ? chapter?.title || '当前章节' : '流程已播放完成';
     document.getElementById('previewEndHint').textContent = nextScene ? '点击进入下一个场景' : '点击关闭预览';
     renderPreviewPortrait(document.getElementById('previewCharacterLeft'), 'left', null, false, renderToken);
     renderPreviewPortrait(document.getElementById('previewCharacterRight'), 'right', null, false, renderToken);
@@ -1580,11 +1612,262 @@ function renderPreviewFrame() {
       button.addEventListener('click', (event) => {
         event.stopPropagation();
         const target = value.targetBlockId ? previewLocationForBlockId(value.targetBlockId) : null;
-        if (target) { previewState = { ...target, mode: 'playing' }; renderPreviewFrame(); }
+        if (target && previewLocationInScope(target)) { previewState = { ...previewState, ...target, mode: 'playing' }; renderPreviewFrame(); }
+        else if (target) { showToast('该选项指向其他章节，本次章节预览将继续播放当前章节'); advanceScenePreview(true); }
         else advanceScenePreview(true);
       });
     });
   } else text.textContent = '当前内容暂不支持预览。';
+}
+
+function writingIssueLocationLabel(issue) {
+  const location = issue.location || {};
+  if (location.view === 'editor') {
+    const chapter = desktopState.data?.chapters?.[location.chapterIndex];
+    const scene = chapter?.scenes?.[location.sceneIndex];
+    return `${chapter?.title || '未知章节'} / ${scene?.title || '未知场景'}`;
+  }
+  if (location.view === 'characters') return '角色与立绘';
+  if (location.view === 'assets') return '素材库';
+  return '项目';
+}
+function navigateToWritingIssue(issue) {
+  const location = issue.location || {};
+  if (location.view === 'editor') { navigateToProjectBlock(location.chapterIndex, location.sceneIndex, location.blockIndex); return; }
+  if (location.view === 'characters') {
+    document.querySelector('[data-view="characters"]')?.click();
+    requestAnimationFrame(() => document.querySelector(`.character-card[data-character-id="${location.characterId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    return;
+  }
+  if (location.view === 'assets') {
+    document.querySelector('[data-view="assets"]')?.click();
+    requestAnimationFrame(() => document.querySelector(`.asset-card[data-asset-id="${location.assetId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  }
+}
+async function physicalAssetIssues(assetReferences, renderToken) {
+  if (!desktopState.filePath || !desktopApi?.assetExists) return [];
+  const targets = new Map();
+  assetReferences.forEach((reference) => { if (reference.relativePath && !targets.has(reference.relativePath)) targets.set(reference.relativePath, reference); });
+  (desktopState.data.assets || []).forEach((asset) => {
+    const relativePath = asset.relativePath || asset.fileName;
+    if (relativePath && !targets.has(relativePath)) targets.set(relativePath, { relativePath, label: asset.name || '素材', location: { view: 'assets', assetId: asset.id } });
+  });
+  (desktopState.data.characters || []).forEach((character) => {
+    [...(character.avatarGroup || []), ...(character.portraitGroup || [])].forEach((media) => {
+      if (media.relativePath && !targets.has(media.relativePath)) targets.set(media.relativePath, { relativePath: media.relativePath, label: `${character.name} · ${media.name}`, location: { view: 'characters', characterId: character.id } });
+    });
+  });
+  const results = await Promise.all([...targets.values()].map(async (target) => {
+    try { return await desktopApi.assetExists(desktopState.filePath, target.relativePath) ? null : target; }
+    catch { return target; }
+  }));
+  if (renderToken !== writingCheckRenderToken) return [];
+  return results.filter(Boolean).map((target, index) => ({ id: `physical-asset-issue-${index}`, severity: 'error', category: '失效素材', title: `${target.label}文件不存在`, detail: target.relativePath, location: target.location }));
+}
+function renderWritingIssueResults(view, issues, checkingDisk = false) {
+  const previous = view.querySelector('.writing-check-results');
+  previous?.remove();
+  const results = addChild(view, 'div', 'writing-check-results');
+  const errors = issues.filter((issue) => issue.severity === 'error').length;
+  const warnings = issues.length - errors;
+  const summary = addChild(results, 'div', 'writing-check-summary');
+  [['全部问题', issues.length, 'all'], ['需要修复', errors, 'error'], ['建议调整', warnings, 'warning']].forEach(([label, count, filter]) => {
+    const button = addChild(summary, 'button', `writing-check-summary-item${writingCheckFilter === filter ? ' active' : ''}`); button.type = 'button'; button.dataset.filter = filter;
+    addChild(button, 'b', '', String(count)); addChild(button, 'span', '', label);
+    button.addEventListener('click', () => { writingCheckFilter = filter; renderWritingIssueResults(view, issues, checkingDisk); });
+  });
+  if (checkingDisk) addChild(results, 'div', 'writing-check-scanning', '正在核对本地素材文件…');
+  const visibleIssues = issues.filter((issue) => writingCheckFilter === 'all' || issue.severity === writingCheckFilter);
+  if (!visibleIssues.length) {
+    const empty = addChild(results, 'div', 'writing-check-empty'); addChild(empty, 'b', '', issues.length ? '当前筛选下没有问题' : '没有发现写作问题'); addChild(empty, 'span', '', issues.length ? '可以切换其他问题类型继续查看。' : '当前对白、角色、素材与选择关联均通过检查。');
+    return;
+  }
+  const grouped = new Map();
+  visibleIssues.forEach((issue) => { if (!grouped.has(issue.category)) grouped.set(issue.category, []); grouped.get(issue.category).push(issue); });
+  grouped.forEach((categoryIssues, category) => {
+    const section = addChild(results, 'section', 'writing-check-group');
+    const heading = addChild(section, 'div', 'writing-check-group-heading'); addChild(heading, 'h3', '', category); addChild(heading, 'span', '', String(categoryIssues.length));
+    const list = addChild(section, 'div', 'writing-check-list');
+    categoryIssues.forEach((issue) => {
+      const item = addChild(list, 'button', `writing-check-item ${issue.severity}`); item.type = 'button'; item.addEventListener('click', () => navigateToWritingIssue(issue));
+      addChild(item, 'span', 'writing-check-severity', issue.severity === 'error' ? '!' : '·');
+      const copy = addChild(item, 'span', 'writing-check-copy'); addChild(copy, 'b', '', issue.title); addChild(copy, 'small', '', issue.detail || writingIssueLocationLabel(issue));
+      addChild(item, 'span', 'writing-check-location', writingIssueLocationLabel(issue)); addChild(item, 'span', 'writing-check-jump', '›');
+    });
+  });
+}
+async function renderWritingChecks() {
+  const view = views.checks;
+  if (!view || !desktopState.data || !writingCheckTools) return;
+  const renderToken = ++writingCheckRenderToken;
+  view.replaceChildren();
+  const heading = addChild(view, 'div', 'section-title writing-check-heading');
+  const copy = addChild(heading, 'div'); addChild(copy, 'div', 'eyebrow', 'SCRIPT HEALTH'); addChild(copy, 'h2', '', '写作检查'); addChild(copy, 'p', 'muted', `检查 ${(storyFlowTools?.flattenProjectScenes(desktopState.data.chapters) || []).length} 个场景`);
+  const refresh = addChild(heading, 'button', 'file-button', '重新检查'); refresh.type = 'button'; refresh.addEventListener('click', renderWritingChecks);
+  const baseResult = writingCheckTools.collectWritingIssues(desktopState.data);
+  renderWritingIssueResults(view, baseResult.issues, Boolean(desktopState.filePath));
+  const diskIssues = await physicalAssetIssues(baseResult.assetReferences, renderToken);
+  if (renderToken !== writingCheckRenderToken) return;
+  renderWritingIssueResults(view, [...baseResult.issues, ...diskIssues], false);
+}
+
+function ensureSceneFlow() {
+  desktopState.data.sceneFlow = storyFlowTools.normalizeSceneFlow(desktopState.data.sceneFlow, desktopState.data.chapters);
+  return desktopState.data.sceneFlow;
+}
+function sceneFlowLocation(sceneId) {
+  const item = storyFlowTools.flattenProjectScenes(desktopState.data?.chapters).find((sceneItem) => sceneItem.id === sceneId);
+  return item ? { chapterIndex: item.chapterIndex, sceneIndex: item.sceneIndex, blockIndex: 0 } : null;
+}
+function sceneFlowChoiceEdges(sceneItems) {
+  const sceneIdByBlockId = new Map();
+  sceneItems.forEach((item) => (item.scene.blocks || []).forEach((block) => { if (block.id) sceneIdByBlockId.set(block.id, item.id); }));
+  const edges = new Map();
+  sceneItems.forEach((item) => {
+    (item.scene.blocks || []).forEach((block) => {
+      if (block.type !== 'choice') return;
+      (block.options || []).forEach((option) => {
+        const value = typeof option === 'string' ? { text: option, targetBlockId: '' } : option || {};
+        const targetSceneId = sceneIdByBlockId.get(value.targetBlockId);
+        if (!targetSceneId || targetSceneId === item.id) return;
+        const key = `${item.id}:${targetSceneId}`;
+        if (!edges.has(key)) edges.set(key, { sourceSceneId: item.id, targetSceneId, labels: [] });
+        if (value.text) edges.get(key).labels.push(String(value.text));
+      });
+    });
+  });
+  return [...edges.values()];
+}
+function renderSceneFlow() {
+  const view = views.flow;
+  if (!view || !desktopState.data || !storyFlowTools) return;
+  const graph = ensureSceneFlow();
+  const sceneItems = storyFlowTools.flattenProjectScenes(desktopState.data.chapters);
+  const sceneById = new Map(sceneItems.map((item) => [item.id, item]));
+  const positions = new Map(sceneItems.map((item) => [item.id, graph.positions[item.id] || { x: 0.22 + item.sceneIndex * 0.31, y: 0.22 + item.chapterIndex * 0.3 }]));
+  let flowZoom = Math.min(MAX_SCENE_FLOW_ZOOM, Math.max(MIN_SCENE_FLOW_ZOOM, Number(graph.viewport.zoom) || 1));
+  sceneFlowResizeObserver?.disconnect(); sceneFlowResizeObserver = null;
+  view.replaceChildren();
+  const heading = addChild(view, 'div', 'scene-flow-heading');
+  const title = addChild(heading, 'div'); addChild(title, 'div', 'eyebrow', 'PROJECT STORY FLOW'); addChild(title, 'h2', '', '全项目流程图'); addChild(title, 'p', 'muted', `${sceneItems.length} 个场景 · ${graph.transitions.length} 条顺序连接`);
+  const actions = addChild(heading, 'div', 'scene-flow-heading-actions');
+  const zoomControls = addChild(actions, 'div', 'scene-flow-zoom-controls');
+  const zoomOut = addChild(zoomControls, 'button', 'scene-flow-zoom-button', '−'); zoomOut.type = 'button'; zoomOut.title = '缩小流程图';
+  const zoomReset = addChild(zoomControls, 'button', 'scene-flow-zoom-value', `${Math.round(flowZoom * 100)}%`); zoomReset.type = 'button'; zoomReset.title = '恢复 100%';
+  const zoomIn = addChild(zoomControls, 'button', 'scene-flow-zoom-button', '+'); zoomIn.type = 'button'; zoomIn.title = '放大流程图';
+  const defaultOrder = addChild(actions, 'button', 'file-button', '默认顺序'); defaultOrder.type = 'button';
+  const resetLayout = addChild(actions, 'button', 'file-button', '重置布局'); resetLayout.type = 'button';
+  const preview = addChild(actions, 'button', 'primary-button', '▶ 完整预览'); preview.type = 'button';
+  const surface = addChild(view, 'div', 'scene-flow-surface'); surface.tabIndex = 0;
+  const edgeLayer = addChild(surface, 'div', 'scene-flow-edge-layer');
+  const nodeLayer = addChild(surface, 'div', 'scene-flow-node-layer');
+  const surfacePoint = (position) => {
+    const rect = surface.getBoundingClientRect();
+    return { x: rect.width / 2 + (position.x - graph.viewport.centerX) * rect.width * flowZoom, y: rect.height / 2 + (position.y - graph.viewport.centerY) * rect.height * flowZoom };
+  };
+  const updateGrid = () => {
+    const origin = surfacePoint({ x: 0, y: 0 });
+    surface.style.backgroundPosition = `${origin.x}px ${origin.y}px`;
+    surface.style.setProperty('--scene-flow-grid-size', `${28 * flowZoom}px`);
+  };
+  const updateNodePosition = (sceneId, position) => {
+    positions.set(sceneId, position);
+    const element = nodeLayer.querySelector(`[data-scene-id="${sceneId}"]`);
+    if (!element) return;
+    const point = surfacePoint(position); element.style.left = `${point.x}px`; element.style.top = `${point.y}px`; element.style.setProperty('--scene-flow-node-scale', flowZoom);
+  };
+  const edgePoints = (sourceSceneId, targetSceneId) => {
+    const source = surfacePoint(positions.get(sourceSceneId)); const target = surfacePoint(positions.get(targetSceneId));
+    const deltaX = target.x - source.x; const deltaY = target.y - source.y; const centerDistance = Math.hypot(deltaX, deltaY);
+    if (centerDistance < 1) return null;
+    const directionX = deltaX / centerDistance; const directionY = deltaY / centerDistance;
+    const halfWidth = 104 * flowZoom; const halfHeight = 58 * flowZoom;
+    const inset = 1 / Math.max(Math.abs(directionX) / halfWidth, Math.abs(directionY) / halfHeight);
+    if (centerDistance <= inset * 2 + 8) return null;
+    const sourceX = source.x + directionX * inset; const sourceY = source.y + directionY * inset;
+    const targetX = target.x - directionX * inset; const targetY = target.y - directionY * inset;
+    return { sourceX, sourceY, targetX, targetY, distance: Math.hypot(targetX - sourceX, targetY - sourceY), angle: Math.atan2(targetY - sourceY, targetX - sourceX) * 180 / Math.PI };
+  };
+  const renderEdges = () => {
+    edgeLayer.replaceChildren();
+    graph.transitions.forEach((transition) => {
+      if (!positions.has(transition.sourceSceneId) || !positions.has(transition.targetSceneId)) return;
+      const points = edgePoints(transition.sourceSceneId, transition.targetSceneId); if (!points) return;
+      const line = addChild(edgeLayer, 'button', 'scene-flow-edge sequence'); line.type = 'button'; line.title = '点击移除下一场连接';
+      line.style.left = `${points.sourceX}px`; line.style.top = `${points.sourceY}px`; line.style.width = `${points.distance}px`; line.style.transform = `translateY(-50%) rotate(${points.angle}deg)`;
+      line.addEventListener('click', () => { graph.transitions = graph.transitions.filter((item) => item.sourceSceneId !== transition.sourceSceneId); renderEdges(); renderNodes(); markDirty(); });
+      const label = addChild(edgeLayer, 'span', 'scene-flow-edge-label sequence', '下一场'); label.style.left = `${(points.sourceX + points.targetX) / 2}px`; label.style.top = `${(points.sourceY + points.targetY) / 2}px`; label.style.setProperty('--scene-flow-label-scale', flowZoom);
+    });
+    sceneFlowChoiceEdges(sceneItems).forEach((edge) => {
+      if (!positions.has(edge.sourceSceneId) || !positions.has(edge.targetSceneId)) return;
+      const points = edgePoints(edge.sourceSceneId, edge.targetSceneId); if (!points) return;
+      const line = addChild(edgeLayer, 'span', 'scene-flow-edge choice'); line.style.left = `${points.sourceX}px`; line.style.top = `${points.sourceY}px`; line.style.width = `${points.distance}px`; line.style.transform = `translateY(-50%) rotate(${points.angle}deg)`;
+      const text = edge.labels.length === 1 ? edge.labels[0] : `${edge.labels.length} 个选择`;
+      const label = addChild(edgeLayer, 'span', 'scene-flow-edge-label choice', text); label.title = edge.labels.join(' / '); label.style.left = `${(points.sourceX + points.targetX) / 2}px`; label.style.top = `${(points.sourceY + points.targetY) / 2}px`; label.style.setProperty('--scene-flow-label-scale', flowZoom);
+    });
+  };
+  const startConnection = (event, sourceSceneId) => {
+    event.preventDefault(); event.stopPropagation();
+    const previewLine = addChild(edgeLayer, 'span', 'scene-flow-edge-preview'); const rect = surface.getBoundingClientRect();
+    const move = (pointerEvent) => {
+      const source = surfacePoint(positions.get(sourceSceneId)); const targetX = pointerEvent.clientX - rect.left; const targetY = pointerEvent.clientY - rect.top;
+      previewLine.style.left = `${source.x}px`; previewLine.style.top = `${source.y}px`; previewLine.style.width = `${Math.hypot(targetX - source.x, targetY - source.y)}px`; previewLine.style.transform = `translateY(-50%) rotate(${Math.atan2(targetY - source.y, targetX - source.x) * 180 / Math.PI}deg)`;
+    };
+    const stop = (pointerEvent) => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); previewLine.remove();
+      const targetSceneId = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY)?.closest('.scene-flow-node')?.dataset.sceneId;
+      if (!targetSceneId || targetSceneId === sourceSceneId) return;
+      graph.transitions = graph.transitions.filter((transition) => transition.sourceSceneId !== sourceSceneId);
+      graph.transitions.push({ sourceSceneId, targetSceneId }); renderEdges(); renderNodes(); markDirty();
+    };
+    move(event); window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop);
+  };
+  const renderNodes = () => {
+    nodeLayer.replaceChildren();
+    sceneItems.forEach((item) => {
+      const transition = graph.transitions.find((entry) => entry.sourceSceneId === item.id);
+      const targetScene = transition ? sceneById.get(transition.targetSceneId) : null;
+      const sceneNode = addChild(nodeLayer, 'article', `scene-flow-node${graph.startSceneId === item.id ? ' start' : ''}`); sceneNode.dataset.sceneId = item.id;
+      const nodeHeader = addChild(sceneNode, 'div', 'scene-flow-node-header'); addChild(nodeHeader, 'span', 'scene-flow-chapter', item.chapter.title);
+      const startButton = addChild(nodeHeader, 'button', 'scene-flow-start', graph.startSceneId === item.id ? '起点' : '设为起点'); startButton.type = 'button'; startButton.title = '设置完整预览起点';
+      const body = addChild(sceneNode, 'div', 'scene-flow-node-body'); addChild(body, 'h3', '', item.scene.title); addChild(body, 'p', '', `${item.scene.blocks?.length || 0} 个内容块`);
+      const footer = addChild(sceneNode, 'div', 'scene-flow-node-footer'); addChild(footer, 'span', '', targetScene ? `下一场 · ${targetScene.scene.title}` : '流程终点');
+      const open = addChild(footer, 'button', 'scene-flow-open', '↗'); open.type = 'button'; open.title = '打开场景';
+      const connector = addChild(sceneNode, 'button', 'scene-flow-connector'); connector.type = 'button'; connector.title = '拖动设置下一场'; connector.setAttribute('aria-label', `设置${item.scene.title}的下一场`);
+      startButton.addEventListener('click', () => { graph.startSceneId = item.id; renderNodes(); markDirty(); });
+      open.addEventListener('click', () => navigateToProjectBlock(item.chapterIndex, item.sceneIndex, 0));
+      connector.addEventListener('pointerdown', (event) => startConnection(event, item.id));
+      sceneNode.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || event.target.closest('button')) return;
+        event.preventDefault(); const rect = surface.getBoundingClientRect(); const startPosition = positions.get(item.id); const startX = event.clientX; const startY = event.clientY;
+        sceneNode.setPointerCapture(event.pointerId); sceneNode.classList.add('dragging');
+        const move = (pointerEvent) => { const position = { x: startPosition.x + (pointerEvent.clientX - startX) / (rect.width * flowZoom), y: startPosition.y + (pointerEvent.clientY - startY) / (rect.height * flowZoom) }; updateNodePosition(item.id, position); renderEdges(); };
+        const stop = (pointerEvent) => { sceneNode.removeEventListener('pointermove', move); sceneNode.removeEventListener('pointerup', stop); sceneNode.removeEventListener('pointercancel', stop); sceneNode.classList.remove('dragging'); if (sceneNode.hasPointerCapture(pointerEvent.pointerId)) sceneNode.releasePointerCapture(pointerEvent.pointerId); graph.positions[item.id] = positions.get(item.id); markDirty(); };
+        sceneNode.addEventListener('pointermove', move); sceneNode.addEventListener('pointerup', stop); sceneNode.addEventListener('pointercancel', stop);
+      });
+      updateNodePosition(item.id, positions.get(item.id));
+    });
+  };
+  const applyZoom = (value, persist = true) => {
+    const previous = flowZoom; flowZoom = Math.round(Math.min(MAX_SCENE_FLOW_ZOOM, Math.max(MIN_SCENE_FLOW_ZOOM, Number(value) || 1)) * 20) / 20; graph.viewport.zoom = flowZoom;
+    zoomReset.textContent = `${Math.round(flowZoom * 100)}%`; zoomOut.disabled = flowZoom <= MIN_SCENE_FLOW_ZOOM; zoomIn.disabled = flowZoom >= MAX_SCENE_FLOW_ZOOM;
+    updateGrid(); positions.forEach((position, sceneId) => updateNodePosition(sceneId, position)); renderEdges(); if (persist && previous !== flowZoom) markDirty();
+  };
+  zoomOut.addEventListener('click', () => applyZoom(flowZoom - 0.1)); zoomReset.addEventListener('click', () => applyZoom(1)); zoomIn.addEventListener('click', () => applyZoom(flowZoom + 0.1));
+  defaultOrder.addEventListener('click', () => { graph.transitions = storyFlowTools.defaultSceneTransitions(desktopState.data.chapters); graph.startSceneId = sceneItems[0]?.id || ''; renderNodes(); renderEdges(); markDirty(); showToast('已恢复默认场景顺序'); });
+  resetLayout.addEventListener('click', () => { graph.positions = {}; graph.viewport = { centerX: 0.5, centerY: 0.5, zoom: 1 }; renderSceneFlow(); markDirty(); });
+  preview.addEventListener('click', startProjectFlowPreview);
+  surface.addEventListener('wheel', (event) => { event.preventDefault(); applyZoom(flowZoom + (event.deltaY < 0 ? 0.1 : -0.1)); }, { passive: false });
+  surface.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.target.closest('.scene-flow-node, .scene-flow-edge, button')) return;
+    event.preventDefault(); surface.focus({ preventScroll: true }); const rect = surface.getBoundingClientRect(); const startCenter = { x: graph.viewport.centerX, y: graph.viewport.centerY }; const startX = event.clientX; const startY = event.clientY;
+    surface.setPointerCapture(event.pointerId); surface.classList.add('panning');
+    const move = (pointerEvent) => { graph.viewport.centerX = startCenter.x - (pointerEvent.clientX - startX) / (rect.width * flowZoom); graph.viewport.centerY = startCenter.y - (pointerEvent.clientY - startY) / (rect.height * flowZoom); updateGrid(); positions.forEach((position, sceneId) => updateNodePosition(sceneId, position)); renderEdges(); };
+    const stop = (pointerEvent) => { surface.removeEventListener('pointermove', move); surface.removeEventListener('pointerup', stop); surface.removeEventListener('pointercancel', stop); surface.classList.remove('panning'); if (surface.hasPointerCapture(pointerEvent.pointerId)) surface.releasePointerCapture(pointerEvent.pointerId); markDirty(); };
+    surface.addEventListener('pointermove', move); surface.addEventListener('pointerup', stop); surface.addEventListener('pointercancel', stop);
+  });
+  renderNodes(); applyZoom(flowZoom, false);
+  sceneFlowResizeObserver = new ResizeObserver(() => applyZoom(flowZoom, false)); sceneFlowResizeObserver.observe(surface);
 }
 
 navItems.forEach((item) => item.addEventListener('click', () => {
@@ -1592,14 +1875,17 @@ navItems.forEach((item) => item.addEventListener('click', () => {
   const target = item.dataset.view;
   relationshipResizeObserver?.disconnect();
   relationshipResizeObserver = null;
+  sceneFlowResizeObserver?.disconnect();
+  sceneFlowResizeObserver = null;
   navItems.forEach((nav) => nav.classList.toggle('active', nav === item));
   document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor');
-  views.characters.classList.toggle('hidden', target !== 'characters'); views.relationships?.classList.add('hidden'); views.assets.classList.toggle('hidden', target !== 'assets');
+  views.characters.classList.toggle('hidden', target !== 'characters'); views.relationships?.classList.add('hidden'); views.assets.classList.toggle('hidden', target !== 'assets'); views.checks?.classList.toggle('hidden', target !== 'checks'); views.flow?.classList.toggle('hidden', target !== 'flow');
   document.getElementById('floatingInspectorLayer')?.classList.toggle('hidden', target !== 'editor');
   const breadcrumb = document.querySelector('.breadcrumb'); const separator = breadcrumb?.querySelector('span:nth-child(2)'); const detail = breadcrumb?.querySelector('strong');
-  breadcrumb?.querySelector('span:first-child')?.replaceChildren(document.createTextNode(target === 'characters' ? '角色与立绘' : target === 'assets' ? '项目素材库' : '剧本编辑器'));
+  const breadcrumbTitles = { characters: '角色与立绘', assets: '项目素材库', checks: '写作检查', flow: '全项目流程图', editor: '剧本编辑器' };
+  breadcrumb?.querySelector('span:first-child')?.replaceChildren(document.createTextNode(breadcrumbTitles[target] || '剧本编辑器'));
   if (separator) separator.hidden = target !== 'editor'; if (detail) detail.hidden = target !== 'editor';
-  if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets();
+  if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets(); if (target === 'checks') renderWritingChecks(); if (target === 'flow') renderSceneFlow();
 }));
 function revealNewBlock(blockIndex, focusSelector) {
   requestAnimationFrame(() => {
@@ -2184,9 +2470,14 @@ function applyCharacterToBlock(character, block) {
   block.portraitPreset = defaultPortrait ? null : character.portraitPreset || null;
 }
 function ensureRelationshipGraph() {
-  desktopState.data.relationshipGraph ||= { positions: {}, relationships: [] };
+  desktopState.data.relationshipGraph ||= { positions: {}, relationships: [], notes: [], viewport: { centerX: 0.5, centerY: 0.5, zoom: 1 } };
   desktopState.data.relationshipGraph.positions ||= {};
   desktopState.data.relationshipGraph.relationships ||= [];
+  desktopState.data.relationshipGraph.notes ||= [];
+  desktopState.data.relationshipGraph.viewport ||= { centerX: 0.5, centerY: 0.5, zoom: relationshipZoom };
+  desktopState.data.relationshipGraph.viewport.centerX = Number.isFinite(Number(desktopState.data.relationshipGraph.viewport.centerX)) ? Number(desktopState.data.relationshipGraph.viewport.centerX) : 0.5;
+  desktopState.data.relationshipGraph.viewport.centerY = Number.isFinite(Number(desktopState.data.relationshipGraph.viewport.centerY)) ? Number(desktopState.data.relationshipGraph.viewport.centerY) : 0.5;
+  desktopState.data.relationshipGraph.viewport.zoom = clampRelationshipZoom(desktopState.data.relationshipGraph.viewport.zoom);
   return desktopState.data.relationshipGraph;
 }
 function relationshipNodePosition(graph, characterId, characterIndex, characterCount) {
@@ -2196,9 +2487,12 @@ function relationshipNodePosition(graph, characterId, characterIndex, characterC
 }
 function showRelationshipGraph() {
   if (!desktopState.data) return;
+  sceneFlowResizeObserver?.disconnect(); sceneFlowResizeObserver = null;
   document.querySelector('.editor-layout')?.classList.add('hidden');
   views.characters?.classList.add('hidden');
   views.assets?.classList.add('hidden');
+  views.checks?.classList.add('hidden');
+  views.flow?.classList.add('hidden');
   views.relationships?.classList.remove('hidden');
   document.getElementById('floatingInspectorLayer')?.classList.add('hidden');
   navItems.forEach((item) => item.classList.toggle('active', item.dataset.view === 'characters'));
@@ -2212,6 +2506,7 @@ function renderRelationshipGraph() {
   const view = views.relationships;
   if (!view || !desktopState.data) return;
   const graph = ensureRelationshipGraph();
+  relationshipZoom = clampRelationshipZoom(graph.viewport.zoom);
   const characters = desktopState.data.characters || [];
   if (selectedRelationshipId && !graph.relationships.some((relationship) => relationship.id === selectedRelationshipId)) selectedRelationshipId = '';
   relationshipResizeObserver?.disconnect();
@@ -2226,26 +2521,39 @@ function renderRelationshipGraph() {
   const zoomOut = addChild(zoomControls, 'button', 'relationship-zoom-button', '−'); zoomOut.type = 'button'; zoomOut.title = '缩小关系图'; zoomOut.setAttribute('aria-label', '缩小关系图');
   const zoomReset = addChild(zoomControls, 'button', 'relationship-zoom-value', `${Math.round(relationshipZoom * 100)}%`); zoomReset.type = 'button'; zoomReset.title = '恢复 100%';
   const zoomIn = addChild(zoomControls, 'button', 'relationship-zoom-button', '+'); zoomIn.type = 'button'; zoomIn.title = '放大关系图'; zoomIn.setAttribute('aria-label', '放大关系图');
+  const addNote = addChild(headingActions, 'button', 'file-button relationship-add-note', '＋ 便签'); addNote.type = 'button'; addNote.title = '添加便签；在画布中也可以粘贴文本';
   const resetLayout = addChild(headingActions, 'button', 'file-button', '重新布局'); resetLayout.type = 'button';
   backButton.addEventListener('click', () => document.querySelector('[data-view="characters"]')?.click());
-  resetLayout.addEventListener('click', () => { graph.positions = {}; selectedRelationshipId = ''; renderRelationshipGraph(); markDirty(); });
+  resetLayout.addEventListener('click', () => { graph.positions = {}; graph.viewport = { centerX: 0.5, centerY: 0.5, zoom: 1 }; relationshipZoom = 1; selectedRelationshipId = ''; renderRelationshipGraph(); markDirty(); });
   const surface = addChild(view, 'div', 'relationship-surface');
+  surface.tabIndex = 0;
   const edgeLayer = addChild(surface, 'div', 'relationship-edge-layer');
   const nodeLayer = addChild(surface, 'div', 'relationship-node-layer');
+  const noteLayer = addChild(surface, 'div', 'relationship-note-layer');
   const editor = addChild(surface, 'div', 'relationship-editor');
   if (!characters.length) {
     const empty = addChild(surface, 'div', 'relationship-empty');
     addChild(empty, 'b', '', '还没有角色');
     const create = addChild(empty, 'button', 'primary-button', '新建角色'); create.type = 'button'; create.addEventListener('click', () => document.querySelector('[data-view="characters"]')?.click());
-    return;
   }
   const positions = new Map(characters.map((character, characterIndex) => [character.id, relationshipNodePosition(graph, character.id, characterIndex, characters.length)]));
   const surfacePoint = (position) => {
     const surfaceRect = surface.getBoundingClientRect();
     return {
-      x: surfaceRect.width / 2 + (position.x - 0.5) * surfaceRect.width * relationshipZoom,
-      y: surfaceRect.height / 2 + (position.y - 0.5) * surfaceRect.height * relationshipZoom
+      x: surfaceRect.width / 2 + (position.x - graph.viewport.centerX) * surfaceRect.width * relationshipZoom,
+      y: surfaceRect.height / 2 + (position.y - graph.viewport.centerY) * surfaceRect.height * relationshipZoom
     };
+  };
+  const graphPoint = (surfaceX, surfaceY) => {
+    const surfaceRect = surface.getBoundingClientRect();
+    return {
+      x: graph.viewport.centerX + (surfaceX - surfaceRect.width / 2) / (surfaceRect.width * relationshipZoom),
+      y: graph.viewport.centerY + (surfaceY - surfaceRect.height / 2) / (surfaceRect.height * relationshipZoom)
+    };
+  };
+  const updateSurfaceGrid = () => {
+    const origin = surfacePoint({ x: 0, y: 0 });
+    surface.style.backgroundPosition = `${origin.x}px ${origin.y}px`;
   };
   const updateNodePosition = (characterId, position) => {
     positions.set(characterId, position);
@@ -2256,6 +2564,79 @@ function renderRelationshipGraph() {
       characterNode.style.top = `${point.y}px`;
       characterNode.style.setProperty('--relationship-node-scale', relationshipZoom);
     }
+  };
+  const updateNotePosition = (note) => {
+    const noteElement = noteLayer.querySelector(`[data-note-id="${note.id}"]`);
+    if (!noteElement) return;
+    const point = surfacePoint(note);
+    noteElement.style.left = `${point.x}px`;
+    noteElement.style.top = `${point.y}px`;
+    noteElement.style.setProperty('--relationship-note-scale', relationshipZoom);
+  };
+  const renderNotes = () => {
+    noteLayer.replaceChildren();
+    graph.notes.forEach((note) => {
+      const noteElement = addChild(noteLayer, 'article', 'relationship-note'); noteElement.dataset.noteId = note.id; noteElement.style.setProperty('--relationship-note-color', note.color);
+      const noteHeader = addChild(noteElement, 'div', 'relationship-note-header');
+      const colorButton = addChild(noteHeader, 'button', 'relationship-note-color'); colorButton.type = 'button'; colorButton.title = '切换便签颜色'; colorButton.style.background = note.color;
+      addChild(noteHeader, 'span', 'relationship-note-label', '便签');
+      const deleteNote = addChild(noteHeader, 'button', 'relationship-note-delete', '×'); deleteNote.type = 'button'; deleteNote.title = '删除便签'; deleteNote.setAttribute('aria-label', '删除便签');
+      const text = addChild(noteElement, 'textarea', 'relationship-note-text'); text.value = note.text; text.placeholder = '记录人物动机、冲突或待补内容…'; text.setAttribute('aria-label', '便签内容');
+      text.addEventListener('input', () => { note.text = text.value; markDirty(); });
+      colorButton.addEventListener('click', () => {
+        const colorIndex = RELATIONSHIP_NOTE_COLORS.indexOf(note.color);
+        note.color = RELATIONSHIP_NOTE_COLORS[(colorIndex + 1 + RELATIONSHIP_NOTE_COLORS.length) % RELATIONSHIP_NOTE_COLORS.length];
+        noteElement.style.setProperty('--relationship-note-color', note.color);
+        colorButton.style.background = note.color;
+        markDirty();
+      });
+      deleteNote.addEventListener('click', async () => {
+        if (!(await requestDeleteConfirmation('确定删除这张便签吗？'))) return;
+        graph.notes = graph.notes.filter((item) => item.id !== note.id);
+        renderNotes();
+        markDirty();
+      });
+      noteHeader.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || event.target.closest('button')) return;
+        event.preventDefault();
+        const surfaceRect = surface.getBoundingClientRect();
+        const startPosition = { x: note.x, y: note.y }; const startX = event.clientX; const startY = event.clientY;
+        noteHeader.setPointerCapture(event.pointerId); noteElement.classList.add('dragging');
+        const moveNote = (pointerEvent) => {
+          note.x = startPosition.x + (pointerEvent.clientX - startX) / (surfaceRect.width * relationshipZoom);
+          note.y = startPosition.y + (pointerEvent.clientY - startY) / (surfaceRect.height * relationshipZoom);
+          updateNotePosition(note);
+        };
+        const stopNote = (pointerEvent) => {
+          noteHeader.removeEventListener('pointermove', moveNote); noteHeader.removeEventListener('pointerup', stopNote); noteHeader.removeEventListener('pointercancel', stopNote); noteElement.classList.remove('dragging');
+          if (noteHeader.hasPointerCapture(pointerEvent.pointerId)) noteHeader.releasePointerCapture(pointerEvent.pointerId);
+          markDirty();
+        };
+        noteHeader.addEventListener('pointermove', moveNote); noteHeader.addEventListener('pointerup', stopNote); noteHeader.addEventListener('pointercancel', stopNote);
+      });
+      updateNotePosition(note);
+    });
+  };
+  let latestCanvasPoint = { x: surface.clientWidth / 2, y: surface.clientHeight / 2 };
+  const createNote = (noteText = '', placement = latestCanvasPoint) => {
+    const position = graphPoint(placement.x, placement.y);
+    const note = { id: `relationship-note-${Date.now()}`, text: String(noteText || ''), color: RELATIONSHIP_NOTE_COLORS[graph.notes.length % RELATIONSHIP_NOTE_COLORS.length], x: position.x, y: position.y };
+    graph.notes.push(note);
+    renderNotes();
+    markDirty();
+    requestAnimationFrame(() => noteLayer.querySelector(`[data-note-id="${note.id}"] .relationship-note-text`)?.focus());
+  };
+  addNote.addEventListener('click', () => createNote('', { x: surface.clientWidth / 2 + (graph.notes.length % 4) * 22, y: surface.clientHeight / 2 + (graph.notes.length % 4) * 18 }));
+  surface.addEventListener('pointermove', (event) => {
+    const surfaceRect = surface.getBoundingClientRect();
+    latestCanvasPoint = { x: event.clientX - surfaceRect.left, y: event.clientY - surfaceRect.top };
+  });
+  view.onpaste = (event) => {
+    if (event.target.closest('input, textarea, [contenteditable="true"]')) return;
+    const pastedText = event.clipboardData?.getData('text/plain')?.trim();
+    if (!pastedText) return;
+    event.preventDefault();
+    createNote(pastedText);
   };
   const renderEditor = () => {
     editor.replaceChildren();
@@ -2315,7 +2696,7 @@ function renderRelationshipGraph() {
     const previewLine = addChild(edgeLayer, 'div', 'relationship-edge-preview');
     const updatePreview = (pointerEvent) => {
       const sourcePoint = surfacePoint(sourcePosition); const sourceX = sourcePoint.x; const sourceY = sourcePoint.y;
-      const targetX = Math.max(0, Math.min(surfaceRect.width, pointerEvent.clientX - surfaceRect.left)); const targetY = Math.max(0, Math.min(surfaceRect.height, pointerEvent.clientY - surfaceRect.top));
+      const targetX = pointerEvent.clientX - surfaceRect.left; const targetY = pointerEvent.clientY - surfaceRect.top;
       previewLine.style.left = `${sourceX}px`; previewLine.style.top = `${sourceY}px`; previewLine.style.width = `${Math.hypot(targetX - sourceX, targetY - sourceY)}px`; previewLine.style.transform = `translateY(-50%) rotate(${Math.atan2(targetY - sourceY, targetX - sourceX) * 180 / Math.PI}deg)`;
     };
     const stopRelationship = (pointerEvent) => {
@@ -2348,31 +2729,64 @@ function renderRelationshipGraph() {
       const startPosition = positions.get(character.id); const startX = event.clientX; const startY = event.clientY;
       characterNode.setPointerCapture(event.pointerId);
       const moveNode = (pointerEvent) => {
-        const nextPosition = { x: Math.min(0.92, Math.max(0.08, startPosition.x + (pointerEvent.clientX - startX) / (surfaceRect.width * relationshipZoom))), y: Math.min(0.88, Math.max(0.12, startPosition.y + (pointerEvent.clientY - startY) / (surfaceRect.height * relationshipZoom))) };
+        const nextPosition = { x: startPosition.x + (pointerEvent.clientX - startX) / (surfaceRect.width * relationshipZoom), y: startPosition.y + (pointerEvent.clientY - startY) / (surfaceRect.height * relationshipZoom) };
         updateNodePosition(character.id, nextPosition); renderEdges();
       };
-      const stopNode = (pointerEvent) => { characterNode.removeEventListener('pointermove', moveNode); characterNode.removeEventListener('pointerup', stopNode); if (characterNode.hasPointerCapture(pointerEvent.pointerId)) characterNode.releasePointerCapture(pointerEvent.pointerId); graph.positions[character.id] = positions.get(character.id); markDirty(); };
-      characterNode.addEventListener('pointermove', moveNode); characterNode.addEventListener('pointerup', stopNode);
+      const stopNode = (pointerEvent) => { characterNode.removeEventListener('pointermove', moveNode); characterNode.removeEventListener('pointerup', stopNode); characterNode.removeEventListener('pointercancel', stopNode); if (characterNode.hasPointerCapture(pointerEvent.pointerId)) characterNode.releasePointerCapture(pointerEvent.pointerId); graph.positions[character.id] = positions.get(character.id); markDirty(); };
+      characterNode.addEventListener('pointermove', moveNode); characterNode.addEventListener('pointerup', stopNode); characterNode.addEventListener('pointercancel', stopNode);
     });
     updateNodePosition(character.id, position);
   });
-  const applyRelationshipZoom = (value, persist = true) => {
+  const applyRelationshipZoom = (value, persist = true, anchorPoint = null) => {
+    const previousZoom = relationshipZoom;
+    const anchoredGraphPoint = anchorPoint ? graphPoint(anchorPoint.x, anchorPoint.y) : null;
     relationshipZoom = clampRelationshipZoom(value);
+    if (anchoredGraphPoint && previousZoom !== relationshipZoom) {
+      const surfaceRect = surface.getBoundingClientRect();
+      graph.viewport.centerX = anchoredGraphPoint.x - (anchorPoint.x - surfaceRect.width / 2) / (surfaceRect.width * relationshipZoom);
+      graph.viewport.centerY = anchoredGraphPoint.y - (anchorPoint.y - surfaceRect.height / 2) / (surfaceRect.height * relationshipZoom);
+    }
+    graph.viewport.zoom = relationshipZoom;
     if (persist) localStorage.setItem(RELATIONSHIP_ZOOM_STORAGE_KEY, String(relationshipZoom));
     zoomReset.textContent = `${Math.round(relationshipZoom * 100)}%`;
     zoomOut.disabled = relationshipZoom <= MIN_RELATIONSHIP_ZOOM;
     zoomIn.disabled = relationshipZoom >= MAX_RELATIONSHIP_ZOOM;
     surface.style.setProperty('--relationship-grid-size', `${28 * relationshipZoom}px`);
+    updateSurfaceGrid();
     positions.forEach((position, characterId) => updateNodePosition(characterId, position));
+    renderNotes();
     renderEdges();
+    if (persist && previousZoom !== relationshipZoom) markDirty();
   };
   zoomOut.addEventListener('click', () => applyRelationshipZoom(relationshipZoom - 0.1));
   zoomReset.addEventListener('click', () => applyRelationshipZoom(1));
   zoomIn.addEventListener('click', () => applyRelationshipZoom(relationshipZoom + 0.1));
   surface.addEventListener('wheel', (event) => {
+    if (event.target.closest('textarea, input')) return;
     event.preventDefault();
-    applyRelationshipZoom(relationshipZoom + (event.deltaY < 0 ? 0.1 : -0.1));
+    const surfaceRect = surface.getBoundingClientRect();
+    applyRelationshipZoom(relationshipZoom + (event.deltaY < 0 ? 0.1 : -0.1), true, { x: event.clientX - surfaceRect.left, y: event.clientY - surfaceRect.top });
   }, { passive: false });
+  surface.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.target.closest('.relationship-node, .relationship-note, .relationship-edge, .relationship-edge-label, .relationship-editor, button, input, textarea')) return;
+    event.preventDefault(); surface.focus({ preventScroll: true });
+    const surfaceRect = surface.getBoundingClientRect();
+    const startCenter = { x: graph.viewport.centerX, y: graph.viewport.centerY }; const startX = event.clientX; const startY = event.clientY;
+    surface.setPointerCapture(event.pointerId); surface.classList.add('panning');
+    const moveCanvas = (pointerEvent) => {
+      graph.viewport.centerX = startCenter.x - (pointerEvent.clientX - startX) / (surfaceRect.width * relationshipZoom);
+      graph.viewport.centerY = startCenter.y - (pointerEvent.clientY - startY) / (surfaceRect.height * relationshipZoom);
+      updateSurfaceGrid();
+      positions.forEach((position, characterId) => updateNodePosition(characterId, position));
+      renderNotes(); renderEdges();
+    };
+    const stopCanvas = (pointerEvent) => {
+      surface.removeEventListener('pointermove', moveCanvas); surface.removeEventListener('pointerup', stopCanvas); surface.removeEventListener('pointercancel', stopCanvas); surface.classList.remove('panning');
+      if (surface.hasPointerCapture(pointerEvent.pointerId)) surface.releasePointerCapture(pointerEvent.pointerId);
+      markDirty();
+    };
+    surface.addEventListener('pointermove', moveCanvas); surface.addEventListener('pointerup', stopCanvas); surface.addEventListener('pointercancel', stopCanvas);
+  });
   relationshipResizeObserver = new ResizeObserver(() => applyRelationshipZoom(relationshipZoom, false));
   relationshipResizeObserver.observe(surface);
   applyRelationshipZoom(relationshipZoom, false);
