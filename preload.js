@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('scriptroom', {
   getVersion: () => ipcRenderer.invoke('app:get-version'),
+  importSkinBackground: () => ipcRenderer.invoke('appearance:import-background'),
+  readSkinBackground: (backgroundId) => ipcRenderer.invoke('appearance:read-background', backgroundId),
+  removeSkinBackground: (backgroundId) => ipcRenderer.invoke('appearance:remove-background', backgroundId),
   newProject: () => ipcRenderer.invoke('project:new'),
   projectExists: (filePath) => ipcRenderer.invoke('project:exists', filePath),
   openProject: () => ipcRenderer.invoke('project:open'),

@@ -1,6 +1,7 @@
 const desktopApi = window.scriptroom;
 const storyFlowTools = window.RropewayStoryFlow;
 const writingCheckTools = window.RropewayWritingChecks;
+const skinSettingsTools = window.RropewaySkinSettings;
 desktopApi?.getVersion?.().then((version) => { const label = document.getElementById('appVersion'); if (label) label.textContent = `v${version}`; }).catch(() => {});
 const navItems = document.querySelectorAll('.nav-item');
 const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), relationships: document.getElementById('relationshipsView'), assets: document.getElementById('assetsView'), checks: document.getElementById('writingChecksView'), flow: document.getElementById('sceneFlowView'), home: document.getElementById('projectHomeView') };
@@ -44,6 +45,13 @@ let draggedSceneInfo = null;
 let ignoreTreeClickUntil = 0;
 const EDITOR_PREFERENCES_STORAGE_KEY = 'rropeway-editor-preferences';
 const DEFAULT_EDITOR_PREFERENCES = { fontSize: 16, letterSpacing: 0, paragraphSpacing: 10, annotationSize: 9, slideshowInterval: 5 };
+const SKIN_SETTINGS_STORAGE_KEY = 'rropeway-skin-settings';
+const SKIN_FONT_STACKS = {
+  system: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+  serif: 'Georgia, "Noto Serif SC", "Songti SC", SimSun, serif',
+  rounded: '"Nunito", "Arial Rounded MT Bold", "Microsoft YaHei", system-ui, sans-serif',
+  mono: '"Cascadia Code", "SFMono-Regular", Consolas, "Microsoft YaHei", monospace'
+};
 const LAYOUT_PREFERENCES_STORAGE_KEY = 'rropeway-layout-preferences';
 const DEFAULT_LAYOUT_PREFERENCES = { sidebarCollapsed: false, sidebarWidth: 246, inspectorCollapsed: false, inspectorWidth: 276, floatingSections: [], floatingPositions: {} };
 
@@ -85,6 +93,9 @@ function currentLayoutPreferences() {
   } catch { return { ...DEFAULT_LAYOUT_PREFERENCES, floatingSections: [], floatingPositions: {} }; }
 }
 let layoutPreferences = currentLayoutPreferences();
+let activeSkinSettings = null;
+let activeSkinBackgroundDataUrl = '';
+let dismissActiveSkinEditor = null;
 function saveLayoutPreferences() { localStorage.setItem(LAYOUT_PREFERENCES_STORAGE_KEY, JSON.stringify(layoutPreferences)); }
 function resetWindowLayout() {
   layoutPreferences = { ...DEFAULT_LAYOUT_PREFERENCES, floatingSections: [], floatingPositions: {} };
@@ -1303,6 +1314,17 @@ async function renameProject() {
   showToast(`项目已重命名为「${normalizedTitle}」`);
 }
 function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; document.body.classList.remove('project-home-active'); views.home?.classList.add('hidden'); desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); updateProjectFolderAction(); document.querySelector('[data-view="editor"]')?.click(); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
+function applyOpenedProjectResult(result, successMessage = '') {
+  applyProject(result.data, result.filePath);
+  if (result.recoveredFromBackup) {
+    desktopState.dirty = true;
+    desktopApi?.setDirty(true);
+    setSaveStatus('已从备份恢复，待保存');
+    showToast('主项目数据异常，已从上一版本恢复，请保存确认');
+    return;
+  }
+  if (successMessage) showToast(successMessage);
+}
 function scheduleAutoSave(delay = 700) {
   clearTimeout(autoSaveTimer);
   if (!desktopState.filePath || !desktopState.dirty || restoringProjectHistory) return;
@@ -1392,7 +1414,7 @@ async function createProjectFromHome(event) {
     showToast('项目已创建');
   } catch (error) { showToast(error.message || '项目创建失败'); }
 }
-async function openProject() { if (desktopState.data && !(await prepareProjectSwitch('当前项目有未保存修改，确定打开另一个项目吗？'))) return; try { const result = await desktopApi.openProject(); if (result) { applyProject(result.data, result.filePath); showToast('项目已打开'); } } catch (error) { showToast(error.message || '打开失败'); } }
+async function openProject() { if (desktopState.data && !(await prepareProjectSwitch('当前项目有未保存修改，确定打开另一个项目吗？'))) return; try { const result = await desktopApi.openProject(); if (result) applyOpenedProjectResult(result, '项目已打开'); } catch (error) { showToast(error.message || '打开失败'); } }
 async function newProject() { if (desktopState.data && !(await prepareProjectSwitch('当前项目有未保存修改，确定新建项目吗？'))) return; showProjectHome(true); document.getElementById('projectCreateName')?.focus(); }
 async function importAssets() { if (!desktopState.filePath) { if (!(await saveProject())) return; } try { const assets = await desktopApi.importAssets(desktopState.filePath); if (!assets.length) return; desktopState.data.assets.push(...assets); renderImportedAssets(); markDirty(); showToast(`已导入 ${assets.length} 个素材`); } catch (error) { showToast(error.message || '素材导入失败'); } }
 function previewSceneData() { return desktopState.data?.chapters?.[previewState?.chapterIndex]?.scenes?.[previewState?.sceneIndex] || null; }
@@ -2012,9 +2034,118 @@ ensureProjectFolderAction();
 updateProjectFolderAction();
 document.getElementById('projectMenuButton')?.addEventListener('click', (event) => { event.stopPropagation(); closeWindowSettingsMenu(); const menu = document.getElementById('windowProjectMenu'); setWindowProjectMenuOpen(Boolean(menu?.hidden)); });
 document.getElementById('newProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); newProject(); }); document.getElementById('openProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); openProject(); }); document.getElementById('saveProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); saveProject(); }); document.getElementById('undoProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); undoProjectChange(); }); document.getElementById('renameProjectBtn')?.addEventListener('click', () => { closeWindowProjectMenu(); renameProject(); }); document.getElementById('openProjectFolderBtn')?.addEventListener('click', openCurrentProjectFolder); document.getElementById('importAssetsBtn')?.addEventListener('click', importAssets);
+function currentSkinSettings() {
+  try {
+    const stored = localStorage.getItem(SKIN_SETTINGS_STORAGE_KEY);
+    if (stored) return skinSettingsTools.normalizeSkinSettings(JSON.parse(stored));
+  } catch {}
+  const theme = currentThemePreference();
+  const resolved = theme === 'system' ? (systemThemeQuery.matches ? 'dark' : 'light') : theme;
+  return skinSettingsTools.presetSkin(resolved === 'dark' ? 'midnight' : 'paper');
+}
+function applySkinVisual(settings, backgroundDataUrl = activeSkinBackgroundDataUrl, persist = false, syncTheme = true) {
+  const normalized = skinSettingsTools.normalizeSkinSettings(settings);
+  activeSkinSettings = normalized;
+  activeSkinBackgroundDataUrl = normalized.backgroundId ? String(backgroundDataUrl || '') : '';
+  const root = document.documentElement;
+  const body = document.body;
+  const density = normalized.density / 100;
+  root.style.setProperty('--bg', normalized.background);
+  root.style.setProperty('--panel', normalized.card);
+  root.style.setProperty('--ink', normalized.text);
+  root.style.setProperty('--muted', normalized.muted);
+  root.style.setProperty('--line', normalized.border);
+  root.style.setProperty('--accent', normalized.accent);
+  root.style.setProperty('--accent-soft', `color-mix(in srgb, ${normalized.accent} 14%, transparent)`);
+  root.style.setProperty('--skin-background', normalized.background);
+  root.style.setProperty('--skin-surface', normalized.surface);
+  root.style.setProperty('--skin-sidebar', normalized.sidebar);
+  root.style.setProperty('--skin-chrome', normalized.chrome);
+  root.style.setProperty('--skin-text', normalized.text);
+  root.style.setProperty('--skin-muted', normalized.muted);
+  root.style.setProperty('--skin-border', normalized.border);
+  root.style.setProperty('--skin-accent', normalized.accent);
+  root.style.setProperty('--skin-card', normalized.card);
+  root.style.setProperty('--skin-panel-opacity', `${normalized.panelOpacity}%`);
+  root.style.setProperty('--skin-background-opacity', String(normalized.backgroundOpacity / 100));
+  root.style.setProperty('--skin-background-blur', `${normalized.backgroundBlur}px`);
+  root.style.setProperty('--skin-background-size', normalized.backgroundSize);
+  root.style.setProperty('--skin-background-position', normalized.backgroundPosition);
+  root.style.setProperty('--skin-background-repeat', normalized.backgroundSize === 'auto' ? 'repeat' : 'no-repeat');
+  root.style.setProperty('--skin-background-image', activeSkinBackgroundDataUrl ? `url("${activeSkinBackgroundDataUrl}")` : 'none');
+  root.style.setProperty('--skin-radius', `${normalized.radius}px`);
+  root.style.setProperty('--skin-density', String(density));
+  root.style.setProperty('--skin-font-family', SKIN_FONT_STACKS[normalized.fontFamily] || SKIN_FONT_STACKS.system);
+  body.dataset.skinActive = 'true';
+  body.dataset.skinPreset = normalized.presetId;
+  body.dataset.theme = normalized.mode;
+  body.dataset.themePreference = syncTheme ? normalized.mode : currentThemePreference();
+  root.style.colorScheme = normalized.mode;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', normalized.chrome);
+  if (persist) {
+    localStorage.setItem(SKIN_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+    if (syncTheme) localStorage.setItem('rropeway-theme', normalized.mode);
+  }
+  updateSettingsMenuState();
+  return normalized;
+}
+async function createSkinBackgroundObjectUrl(backgroundId) {
+  const payload = await desktopApi.readSkinBackground(backgroundId);
+  if (typeof payload === 'string') return payload;
+  if (!payload?.mime || !payload?.data) throw new Error('皮肤背景数据无效');
+  return URL.createObjectURL(new Blob([payload.data], { type: payload.mime }));
+}
+function releaseSkinBackgroundObjectUrl(value) {
+  if (String(value || '').startsWith('blob:')) URL.revokeObjectURL(value);
+}
+async function loadSkinBackground(settings, persistMissing = false) {
+  const normalized = skinSettingsTools.normalizeSkinSettings(settings);
+  if (!normalized.backgroundId || !desktopApi?.readSkinBackground) {
+    applySkinVisual(normalized, '', false);
+    return '';
+  }
+  try {
+    const objectUrl = await createSkinBackgroundObjectUrl(normalized.backgroundId);
+    if (activeSkinBackgroundDataUrl && activeSkinBackgroundDataUrl !== objectUrl) releaseSkinBackgroundObjectUrl(activeSkinBackgroundDataUrl);
+    applySkinVisual(normalized, objectUrl, false);
+    return objectUrl;
+  } catch {
+    const repaired = { ...normalized, presetId: 'custom', backgroundId: '', backgroundName: '' };
+    applySkinVisual(repaired, '', persistMissing);
+    if (persistMissing) showToast('皮肤背景文件不存在，已恢复纯色背景');
+    return '';
+  }
+}
+async function initializeSkinSystem() {
+  const settings = currentSkinSettings();
+  applySkinVisual(settings, '', false);
+  await loadSkinBackground(settings, true);
+}
+function applyThemeSkin(theme) {
+  const preference = ['light', 'dark', 'system'].includes(theme) ? theme : 'light';
+  const resolved = preference === 'system' ? (systemThemeQuery.matches ? 'dark' : 'light') : preference;
+  const previousBackgroundId = activeSkinSettings?.backgroundId;
+  const previousBackgroundUrl = activeSkinBackgroundDataUrl;
+  localStorage.setItem('rropeway-theme', preference);
+  applySkinVisual(skinSettingsTools.presetSkin(resolved === 'dark' ? 'midnight' : 'paper'), '', true, false);
+  document.body.dataset.themePreference = preference;
+  updateSettingsMenuState();
+  if (previousBackgroundId) desktopApi?.removeSkinBackground?.(previousBackgroundId).catch(() => {});
+  releaseSkinBackgroundObjectUrl(previousBackgroundUrl);
+}
 function applyInterfaceScale(scale, persist = true) {
   const safeScale = [90, 100, 110].includes(Number(scale)) ? Number(scale) : 100;
-  document.body.style.zoom = String(safeScale / 100);
+  const scaleFactor = safeScale / 100;
+  const inverseScale = 1 / scaleFactor;
+  document.body.style.removeProperty('transform');
+  document.body.style.removeProperty('transform-origin');
+  document.body.style.removeProperty('width');
+  document.body.style.removeProperty('height');
+  document.body.style.zoom = String(scaleFactor);
+  document.documentElement.style.setProperty('--interface-scale', String(scaleFactor));
+  document.documentElement.style.setProperty('--interface-viewport-width', `${100 * inverseScale}vw`);
+  document.documentElement.style.setProperty('--interface-viewport-height', `${100 * inverseScale}vh`);
+  document.body.dataset.interfaceScale = String(safeScale);
   if (persist) localStorage.setItem('rropeway-interface-scale', String(safeScale));
   updateSettingsMenuState();
 }
@@ -2049,6 +2180,7 @@ function setWindowSettingsMenuOpen(open) {
 }
 function closeWindowSettingsMenu() { setWindowSettingsMenuOpen(false); }
 function openApplicationDialog(type) {
+  dismissActiveSkinEditor?.(false);
   document.querySelector('.application-dialog-overlay')?.remove();
   const overlay = addChild(document.body, 'div', 'editor-dialog-overlay application-dialog-overlay');
   const dialog = addChild(overlay, 'div', 'editor-dialog application-dialog');
@@ -2066,6 +2198,7 @@ function openApplicationDialog(type) {
   overlay.addEventListener('click', (event) => { if (event.target === overlay) dismiss(); });
 }
 function openEditorPreferencesDialog() {
+  dismissActiveSkinEditor?.(false);
   document.querySelector('.application-dialog-overlay')?.remove();
   const overlay = addChild(document.body, 'div', 'editor-dialog-overlay application-dialog-overlay');
   const dialog = addChild(overlay, 'div', 'editor-dialog application-dialog editor-preferences-dialog');
@@ -2116,13 +2249,217 @@ function openEditorPreferencesDialog() {
   overlay.addEventListener('click', (event) => { if (event.target === overlay) dismiss(); });
   updatePreview();
 }
+function openSkinEditorDialog() {
+  dismissActiveSkinEditor?.(false);
+  document.querySelector('.application-dialog-overlay')?.remove();
+  const originalSettings = { ...(activeSkinSettings || currentSkinSettings()) };
+  const originalBackgroundDataUrl = activeSkinBackgroundDataUrl;
+  let draft = { ...originalSettings };
+  let draftBackgroundDataUrl = originalBackgroundDataUrl;
+  let stagedBackgroundId = '';
+  let closed = false;
+  const clearDraftBackgroundPreview = () => {
+    if (draftBackgroundDataUrl && draftBackgroundDataUrl !== originalBackgroundDataUrl) releaseSkinBackgroundObjectUrl(draftBackgroundDataUrl);
+    draftBackgroundDataUrl = '';
+  };
+
+  const overlay = addChild(document.body, 'div', 'editor-dialog-overlay application-dialog-overlay skin-editor-overlay');
+  const dialog = addChild(overlay, 'div', 'editor-dialog application-dialog skin-editor-dialog');
+  const header = addChild(dialog, 'div', 'application-dialog-header skin-editor-header');
+  const heading = addChild(header, 'div');
+  addChild(heading, 'h3', '', '外观皮肤编辑');
+  addChild(heading, 'p', 'preferences-dialog-subtitle', '选择内置皮肤或自由调整整个工作区，所有修改都会实时预览。');
+  const close = addChild(header, 'button', 'application-dialog-close', '×'); close.type = 'button'; close.title = '关闭';
+
+  const preview = addChild(dialog, 'div', 'skin-live-preview');
+  const previewBackdrop = addChild(preview, 'div', 'skin-live-preview-backdrop');
+  const previewChrome = addChild(preview, 'div', 'skin-preview-chrome'); addChild(previewChrome, 'span', '', '✦ Rropeway'); addChild(previewChrome, 'i'); addChild(previewChrome, 'i');
+  const previewWorkspace = addChild(preview, 'div', 'skin-preview-workspace');
+  const previewSidebar = addChild(previewWorkspace, 'div', 'skin-preview-sidebar'); addChild(previewSidebar, 'b', '', '项目大纲'); addChild(previewSidebar, 'span', 'active', '第一章'); addChild(previewSidebar, 'span', '', '第二章');
+  const previewMain = addChild(previewWorkspace, 'div', 'skin-preview-main'); addChild(previewMain, 'small', '', 'SCRIPT EDITOR'); addChild(previewMain, 'h4', '', '港口的最后一班船'); const previewCard = addChild(previewMain, 'div', 'skin-preview-card'); addChild(previewCard, 'b', '', '林澈'); addChild(previewCard, 'p', '', '潮声正从灯塔方向传来。');
+
+  const body = addChild(dialog, 'div', 'skin-editor-body');
+  const presetColumn = addChild(body, 'section', 'skin-preset-column');
+  addChild(presetColumn, 'h4', '', '内置皮肤');
+  addChild(presetColumn, 'p', 'skin-control-description', '可以直接使用，也可以作为自定义起点。');
+  const presetList = addChild(presetColumn, 'div', 'skin-preset-list');
+  const presetButtons = {};
+  Object.values(skinSettingsTools.BUILTIN_SKINS).forEach((preset) => {
+    const button = addChild(presetList, 'button', 'skin-preset-option'); button.type = 'button'; button.dataset.presetId = preset.presetId;
+    const swatches = addChild(button, 'span', 'skin-preset-swatches');
+    [preset.background, preset.sidebar, preset.card, preset.accent].forEach((color) => { const swatch = addChild(swatches, 'i'); swatch.style.background = color; });
+    const copy = addChild(button, 'span', 'skin-preset-copy'); addChild(copy, 'b', '', preset.name); addChild(copy, 'small', '', preset.description);
+    addChild(button, 'span', 'skin-preset-check', '✓');
+    presetButtons[preset.presetId] = button;
+  });
+
+  const controlsColumn = addChild(body, 'section', 'skin-controls-column');
+  const controls = {};
+  const markCustom = () => {
+    draft.presetId = 'custom';
+    draft.name = '自定义皮肤';
+    draft.description = '本机自定义外观';
+  };
+  const applyDraft = () => {
+    draft = skinSettingsTools.normalizeSkinSettings(draft);
+    applySkinVisual(draft, draftBackgroundDataUrl, false);
+    preview.style.setProperty('--preview-bg', draft.background);
+    preview.style.setProperty('--preview-surface', draft.surface);
+    preview.style.setProperty('--preview-sidebar', draft.sidebar);
+    preview.style.setProperty('--preview-chrome', draft.chrome);
+    preview.style.setProperty('--preview-text', draft.text);
+    preview.style.setProperty('--preview-muted', draft.muted);
+    preview.style.setProperty('--preview-border', draft.border);
+    preview.style.setProperty('--preview-accent', draft.accent);
+    preview.style.setProperty('--preview-card', draft.card);
+    preview.style.setProperty('--preview-radius', `${draft.radius}px`);
+    previewBackdrop.style.backgroundImage = draftBackgroundDataUrl ? `url("${draftBackgroundDataUrl}")` : 'none';
+    previewBackdrop.style.backgroundSize = draft.backgroundSize;
+    previewBackdrop.style.backgroundPosition = draft.backgroundPosition;
+    previewBackdrop.style.opacity = String(draft.backgroundOpacity / 100);
+    previewBackdrop.style.filter = `blur(${draft.backgroundBlur}px)`;
+    Object.entries(presetButtons).forEach(([presetId, button]) => button.classList.toggle('active', draft.presetId === presetId));
+  };
+  const createSection = (title, description) => {
+    const section = addChild(controlsColumn, 'div', 'skin-control-section');
+    addChild(section, 'h4', '', title);
+    if (description) addChild(section, 'p', 'skin-control-description', description);
+    return section;
+  };
+  const createSelect = (parent, key, label, values) => {
+    const row = addChild(parent, 'label', 'skin-select-row'); addChild(row, 'span', '', label);
+    const select = addChild(row, 'select');
+    values.forEach(([value, name]) => { const option = document.createElement('option'); option.value = value; option.textContent = name; select.appendChild(option); });
+    controls[key] = select;
+    select.addEventListener('change', () => { markCustom(); draft[key] = select.value; applyDraft(); });
+    return select;
+  };
+  const createRange = (parent, key, label, minimum, maximum, unit) => {
+    const row = addChild(parent, 'label', 'skin-range-row');
+    const copy = addChild(row, 'span'); addChild(copy, 'b', '', label); const output = addChild(copy, 'small');
+    const input = addChild(row, 'input'); input.type = 'range'; input.min = String(minimum); input.max = String(maximum); input.step = '1';
+    controls[key] = { input, output, unit };
+    input.addEventListener('input', () => { markCustom(); draft[key] = Number(input.value); output.textContent = `${input.value}${unit}`; applyDraft(); });
+  };
+
+  const modeSection = createSection('基础模式', '决定系统控件和未覆盖区域使用浅色或深色。');
+  const modeControl = addChild(modeSection, 'div', 'skin-mode-control');
+  ['light', 'dark'].forEach((mode) => { const button = addChild(modeControl, 'button', 'skin-mode-button', mode === 'light' ? '浅色基底' : '深色基底'); button.type = 'button'; button.dataset.mode = mode; button.addEventListener('click', () => { markCustom(); draft.mode = mode; applyDraft(); syncControls(); }); });
+
+  const colorSection = createSection('界面配色', '点击色块或直接输入十六进制颜色。');
+  const colorGrid = addChild(colorSection, 'div', 'skin-color-grid');
+  [
+    ['accent', '重点色'], ['background', '背景色'], ['surface', '内容面板'], ['sidebar', '左侧栏'],
+    ['chrome', '顶部栏'], ['text', '主要文字'], ['muted', '次要文字'], ['border', '分割线'], ['card', '对白卡片']
+  ].forEach(([key, label]) => {
+    const row = addChild(colorGrid, 'label', 'skin-color-control'); addChild(row, 'span', '', label);
+    const inputs = addChild(row, 'span', 'skin-color-inputs'); const picker = addChild(inputs, 'input'); picker.type = 'color'; picker.setAttribute('aria-label', `${label}取色`); const textInput = addChild(inputs, 'input'); textInput.type = 'text'; textInput.maxLength = 7; textInput.spellcheck = false;
+    controls[key] = { picker, text: textInput };
+    picker.addEventListener('input', () => { markCustom(); draft[key] = picker.value; textInput.value = picker.value; applyDraft(); });
+    textInput.addEventListener('input', () => { if (!/^#[0-9a-f]{6}$/i.test(textInput.value)) return; markCustom(); draft[key] = textInput.value; picker.value = textInput.value; applyDraft(); });
+    textInput.addEventListener('blur', () => { textInput.value = draft[key]; });
+  });
+
+  const backgroundSection = createSection('背景图片', '图片保存在 Rropeway 本机数据目录，不会写入剧本仓库。');
+  const backgroundRow = addChild(backgroundSection, 'div', 'skin-background-row');
+  const backgroundCopy = addChild(backgroundRow, 'div', 'skin-background-copy'); addChild(backgroundCopy, 'b', '', '自定义背景'); const backgroundName = addChild(backgroundCopy, 'small', '', '未选择图片');
+  const backgroundActions = addChild(backgroundRow, 'div', 'skin-background-actions');
+  const uploadBackground = addChild(backgroundActions, 'button', 'file-button', '选择图片'); uploadBackground.type = 'button';
+  const removeBackground = addChild(backgroundActions, 'button', 'file-button', '移除'); removeBackground.type = 'button';
+  const backgroundSelects = addChild(backgroundSection, 'div', 'skin-select-grid');
+  createSelect(backgroundSelects, 'backgroundSize', '显示方式', [['cover', '铺满'], ['contain', '完整显示'], ['auto', '原始尺寸 / 平铺']]);
+  createSelect(backgroundSelects, 'backgroundPosition', '对齐位置', [['center', '居中'], ['top', '顶部'], ['bottom', '底部'], ['left', '左侧'], ['right', '右侧']]);
+  createRange(backgroundSection, 'backgroundOpacity', '图片强度', 0, 100, '%');
+  createRange(backgroundSection, 'backgroundBlur', '背景模糊', 0, 20, 'px');
+  createRange(backgroundSection, 'panelOpacity', '面板不透明度', 45, 100, '%');
+
+  const detailSection = createSection('细节与排版', '统一调整组件圆角、信息密度和界面字体。');
+  createRange(detailSection, 'radius', '组件圆角', 0, 18, 'px');
+  createRange(detailSection, 'density', '界面密度', 85, 110, '%');
+  createSelect(detailSection, 'fontFamily', '界面字体', [['system', '系统无衬线'], ['serif', '衬线书稿'], ['rounded', '圆体'], ['mono', '等宽字体']]);
+
+  const syncControls = () => {
+    Object.entries(controls).forEach(([key, control]) => {
+      if (control.picker) { control.picker.value = draft[key]; control.text.value = draft[key]; }
+      else if (control.input) { control.input.value = String(draft[key]); control.output.textContent = `${draft[key]}${control.unit}`; }
+      else control.value = draft[key];
+    });
+    modeControl.querySelectorAll('.skin-mode-button').forEach((button) => button.classList.toggle('active', button.dataset.mode === draft.mode));
+    backgroundName.textContent = draft.backgroundName || '未选择图片';
+    backgroundName.title = draft.backgroundName || '';
+    removeBackground.disabled = !draft.backgroundId;
+    Object.entries(presetButtons).forEach(([presetId, button]) => button.classList.toggle('active', draft.presetId === presetId));
+  };
+
+  Object.entries(presetButtons).forEach(([presetId, button]) => button.addEventListener('click', () => {
+    draft = skinSettingsTools.presetSkin(presetId);
+    clearDraftBackgroundPreview();
+    syncControls(); applyDraft();
+  }));
+  uploadBackground.addEventListener('click', async () => {
+    uploadBackground.disabled = true;
+    try {
+      const imported = await desktopApi?.importSkinBackground?.();
+      if (!imported) return;
+      if (stagedBackgroundId && stagedBackgroundId !== originalSettings.backgroundId) await desktopApi.removeSkinBackground(stagedBackgroundId).catch(() => {});
+      stagedBackgroundId = imported.id;
+      draft.backgroundId = imported.id;
+      draft.backgroundName = imported.name;
+      draft.panelOpacity = Math.min(draft.panelOpacity, 86);
+      markCustom();
+      if (draftBackgroundDataUrl && draftBackgroundDataUrl !== originalBackgroundDataUrl) releaseSkinBackgroundObjectUrl(draftBackgroundDataUrl);
+      draftBackgroundDataUrl = await createSkinBackgroundObjectUrl(imported.id);
+      syncControls(); applyDraft();
+    } catch (error) { showToast(error.message || '背景图片导入失败'); }
+    finally { uploadBackground.disabled = false; }
+  });
+  removeBackground.addEventListener('click', () => { markCustom(); draft.backgroundId = ''; draft.backgroundName = ''; clearDraftBackgroundPreview(); syncControls(); applyDraft(); });
+
+  const actions = addChild(dialog, 'div', 'editor-dialog-actions skin-editor-actions');
+  const reset = addChild(actions, 'button', 'file-button skin-reset-button', '恢复暖纸书房'); reset.type = 'button';
+  const cancel = addChild(actions, 'button', 'file-button', '取消'); cancel.type = 'button';
+  const save = addChild(actions, 'button', 'file-button save', '保存皮肤'); save.type = 'button';
+  const cleanupStagedBackground = async (savedBackgroundId = '') => {
+    if (stagedBackgroundId && stagedBackgroundId !== savedBackgroundId && stagedBackgroundId !== originalSettings.backgroundId) {
+      await desktopApi?.removeSkinBackground?.(stagedBackgroundId).catch(() => {});
+    }
+  };
+  const dismiss = async (saveChanges) => {
+    if (closed) return;
+    closed = true;
+    dismissActiveSkinEditor = null;
+    document.removeEventListener('keydown', handleKeydown);
+    if (saveChanges) {
+      const saved = applySkinVisual(draft, draftBackgroundDataUrl, true);
+      if (originalSettings.backgroundId && originalSettings.backgroundId !== saved.backgroundId) await desktopApi?.removeSkinBackground?.(originalSettings.backgroundId).catch(() => {});
+      if (originalBackgroundDataUrl && originalBackgroundDataUrl !== draftBackgroundDataUrl) releaseSkinBackgroundObjectUrl(originalBackgroundDataUrl);
+      await cleanupStagedBackground(saved.backgroundId);
+      showToast('外观皮肤已保存');
+    } else {
+      applySkinVisual(originalSettings, originalBackgroundDataUrl, false);
+      if (draftBackgroundDataUrl && draftBackgroundDataUrl !== originalBackgroundDataUrl) releaseSkinBackgroundObjectUrl(draftBackgroundDataUrl);
+      await cleanupStagedBackground();
+    }
+    overlay.remove();
+  };
+  const handleKeydown = (event) => { if (event.key === 'Escape') dismiss(false); };
+  dismissActiveSkinEditor = dismiss;
+  document.addEventListener('keydown', handleKeydown);
+  close.addEventListener('click', () => dismiss(false));
+  cancel.addEventListener('click', () => dismiss(false));
+  save.addEventListener('click', () => dismiss(true));
+  reset.addEventListener('click', () => { draft = skinSettingsTools.presetSkin('paper'); clearDraftBackgroundPreview(); syncControls(); applyDraft(); });
+  overlay.addEventListener('click', (event) => { if (event.target === overlay) dismiss(false); });
+  syncControls(); applyDraft();
+}
 document.getElementById('windowSettingsButton')?.addEventListener('click', (event) => { event.stopPropagation(); closeWindowProjectMenu(); const menu = document.getElementById('windowSettingsMenu'); setWindowSettingsMenuOpen(Boolean(menu?.hidden)); });
-document.querySelectorAll('[data-theme-option]').forEach((button) => button.addEventListener('click', () => { applyThemePreference(button.dataset.themeOption); closeWindowSettingsMenu(); }));
+document.querySelectorAll('[data-theme-option]').forEach((button) => button.addEventListener('click', () => { applyThemeSkin(button.dataset.themeOption); closeWindowSettingsMenu(); }));
 document.querySelectorAll('[data-scale-option]').forEach((button) => button.addEventListener('click', () => { applyInterfaceScale(Number(button.dataset.scaleOption)); closeWindowSettingsMenu(); }));
+document.getElementById('skinEditorBtn')?.addEventListener('click', () => { closeWindowSettingsMenu(); openSkinEditorDialog(); });
 document.getElementById('editorPreferencesBtn')?.addEventListener('click', () => { closeWindowSettingsMenu(); openEditorPreferencesDialog(); });
 document.getElementById('resetWindowLayoutBtn')?.addEventListener('click', () => { closeWindowSettingsMenu(); resetWindowLayout(); });
 document.getElementById('windowHelpButton')?.addEventListener('click', () => { closeWindowProjectMenu(); closeWindowSettingsMenu(); openApplicationDialog('help'); });
-systemThemeQuery.addEventListener('change', () => { if (currentThemePreference() === 'system') applyThemePreference('system', false); });
+systemThemeQuery.addEventListener('change', () => { if (currentThemePreference() === 'system') applyThemeSkin('system'); });
 function projectSearchText(value) {
   const container = document.createElement('div'); container.innerHTML = String(value || ''); return (container.textContent || '').replace(/\s+/g, ' ').trim();
 }
@@ -2189,6 +2526,7 @@ document.querySelector('.modal-backdrop')?.addEventListener('click', closeSceneP
 document.getElementById('previewScene')?.addEventListener('click', (event) => { if (!event.target.closest('.preview-options button')) advanceScenePreview(); });
 document.addEventListener('keydown', (event) => { const previewOpen = !document.getElementById('previewModal')?.classList.contains('hidden'); if (previewOpen) { if (event.key === 'Escape') { event.preventDefault(); closeScenePreview(); return; } if (['Enter', ' ', 'ArrowRight'].includes(event.key)) { event.preventDefault(); advanceScenePreview(); return; } } const withCommand = event.ctrlKey || event.metaKey; const key = event.key.toLowerCase(); if (event.key === 'F1') { event.preventDefault(); openApplicationDialog('help'); return; } if (event.key === 'F2') { event.preventDefault(); renameProject(); return; } if (!withCommand) { if (event.key === 'Escape') { closeCriticalNodePickers(); closeWindowProjectMenu(); closeWindowSettingsMenu(); setProjectSearchResultsOpen(false); document.querySelector('.application-dialog-overlay')?.remove(); } return; } if (key === 'z') { event.preventDefault(); if (event.shiftKey) redoProjectChange(); else undoProjectChange(); return; } if (key === 'y') { event.preventDefault(); redoProjectChange(); return; } if (key === 's') { event.preventDefault(); saveProject(); } if (key === 'o') { event.preventDefault(); openProject(); } if (key === 'n') { event.preventDefault(); newProject(); } if (key === 'k' && !event.shiftKey) { event.preventDefault(); document.getElementById('projectSearchInput')?.focus(); } if (key === ',') { event.preventDefault(); closeWindowProjectMenu(); setWindowSettingsMenuOpen(true); } });
 applyThemePreference(currentThemePreference(), false);
+initializeSkinSystem();
 applyInterfaceScale(Number(localStorage.getItem('rropeway-interface-scale') || 100), false);
 applyEditorPreferences(currentEditorPreferences(), false);
 initializeLayoutControls();
@@ -2924,7 +3262,7 @@ async function initializeProject() {
     try {
       if (await desktopApi.projectExists(filePath)) {
         const result = await desktopApi.openProjectPath(filePath);
-        applyProject(result.data, result.filePath);
+        applyOpenedProjectResult(result);
         return;
       }
     } catch {}
@@ -2943,9 +3281,8 @@ async function openRecentProject(filePath) {
   }
   try {
     const result = await desktopApi.openProjectPath(filePath);
-    applyProject(result.data, result.filePath);
+    applyOpenedProjectResult(result, '项目已切换');
     document.querySelector('[data-view="editor"]').click();
-    showToast('项目已切换');
   } catch (error) { showToast(error.message || '项目打开失败'); }
 }
 function openProjectMenu() {
@@ -3012,7 +3349,7 @@ async function deleteProjectEntry(project) {
       for (const nextProject of recentProjects()) {
         if (!(await desktopApi.projectExists(nextProject.filePath))) { forgetRecentProject(nextProject.filePath); continue; }
         const result = await desktopApi.openProjectPath(nextProject.filePath);
-        applyProject(result.data, result.filePath);
+        applyOpenedProjectResult(result);
         break;
       }
     }

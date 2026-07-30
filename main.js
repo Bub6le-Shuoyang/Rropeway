@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { DEFAULT_PROJECT, clone, normalizeProject } = require('./project-format');
 const { createProjectLocation, isManagedProjectFolder, isProjectFilePath, projectDirectory } = require('./project-storage');
 const { collectAssetReferences } = require('./asset-references');
+const { readProjectFile, writeProjectFile } = require('./project-files');
 
 let mainWindow;
 let rendererDirty = false;
@@ -39,18 +40,6 @@ async function chooseProject() {
   const result = await dialog.showOpenDialog(mainWindow, { title: '打开 Rropeway 项目', properties: ['openFile'], filters: [{ name: 'Rropeway 项目', extensions: ['scriptroom', 'json'] }] });
   return result.canceled ? null : result.filePaths[0];
 }
-async function writeProjectFile(target, data) {
-  const normalized = { ...normalizeProject(data), updatedAt: new Date().toISOString() };
-  const tempPath = `${target}.${process.pid}.tmp`;
-  const backupPath = `${target}.backup`;
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(tempPath, JSON.stringify(normalized, null, 2), 'utf8');
-  try { await fs.copyFile(target, backupPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  await fs.rm(target, { force: true });
-  await fs.rename(tempPath, target);
-  rendererDirty = false;
-  return { filePath: target, data: normalized };
-}
 async function nextProjectLocation(parentDirectory, title) {
   let location = createProjectLocation(parentDirectory, title);
   let suffix = 2;
@@ -76,10 +65,8 @@ async function organizeProjectStorage(filePath, data) {
         await fs.copyFile(source, destination);
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
-    try {
-      await fs.mkdir(location.folderPath, { recursive: true });
-      await fs.copyFile(`${filePath}.backup`, `${location.filePath}.backup`);
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    await fs.mkdir(location.folderPath, { recursive: true });
+    await fs.copyFile(filePath, `${location.filePath}.backup`);
     result = await writeProjectFile(location.filePath, normalized);
   } catch (error) {
     await fs.rm(location.folderPath, { recursive: true, force: true });
@@ -163,6 +150,40 @@ async function saveCroppedCharacterAvatar(projectPath, characterId, payload) {
     type: 'png'
   };
 }
+function appearanceBackgroundPath(backgroundId) {
+  const safeId = String(backgroundId || '');
+  if (!/^[a-f0-9-]{36}\.(png|jpe?g|webp)$/i.test(safeId) || path.basename(safeId) !== safeId) {
+    throw new Error('皮肤背景标识无效');
+  }
+  return path.join(app.getPath('userData'), 'appearance', 'backgrounds', safeId);
+}
+async function importAppearanceBackground() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择皮肤背景图片',
+    properties: ['openFile'],
+    filters: [{ name: '背景图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+  });
+  if (result.canceled) return null;
+  const source = result.filePaths[0];
+  const stat = await fs.stat(source);
+  if (!stat.isFile() || stat.size > 30 * 1024 * 1024) throw new Error('背景图片不能超过 30MB');
+  const image = nativeImage.createFromPath(source);
+  const size = image.getSize();
+  if (!size.width || !size.height) throw new Error('无法读取所选背景图片');
+  const extension = path.extname(source).slice(1).toLowerCase();
+  const backgroundId = `${crypto.randomUUID()}.${extension}`;
+  const destination = appearanceBackgroundPath(backgroundId);
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.copyFile(source, destination);
+  return { id: backgroundId, name: path.basename(source), width: size.width, height: size.height };
+}
+async function readAppearanceBackground(backgroundId) {
+  const filePath = appearanceBackgroundPath(backgroundId);
+  const extension = path.extname(filePath).toLowerCase();
+  const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' }[extension];
+  const content = await fs.readFile(filePath);
+  return { mime, data: content };
+}
 async function trashIfExists(target) {
   try { await fs.stat(target); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
   await shell.trashItem(target);
@@ -191,6 +212,12 @@ ipcMain.handle('project:delete', async (_event, filePath) => {
   return true;
 });
 ipcMain.handle('app:get-version', () => app.getVersion());
+ipcMain.handle('appearance:import-background', importAppearanceBackground);
+ipcMain.handle('appearance:read-background', async (_event, backgroundId) => readAppearanceBackground(backgroundId));
+ipcMain.handle('appearance:remove-background', async (_event, backgroundId) => {
+  await fs.rm(appearanceBackgroundPath(backgroundId), { force: true });
+  return true;
+});
 ipcMain.handle('project:exists', async (_event, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return false;
   try { return (await fs.stat(filePath)).isFile(); } catch { return false; }
@@ -198,14 +225,12 @@ ipcMain.handle('project:exists', async (_event, filePath) => {
 ipcMain.handle('project:open', async () => {
   const filePath = await chooseProject();
   if (!filePath) return null;
-  try {
-    const data = normalizeProject(JSON.parse(await fs.readFile(filePath, 'utf8')));
-    return { filePath, data };
-  } catch (error) { throw new Error(`项目文件无法读取：${error.message}`); }
+  try { return await readProjectFile(filePath); }
+  catch (error) { throw new Error(`项目文件无法读取：${error.message}`); }
 });
 ipcMain.handle('project:open-path', async (_event, filePath) => {
   if (!isProjectFilePath(filePath)) throw new Error('项目路径无效');
-  try { return { filePath, data: normalizeProject(JSON.parse(await fs.readFile(filePath, 'utf8'))) }; }
+  try { return await readProjectFile(filePath); }
   catch (error) { throw new Error(`项目文件无法读取：${error.message}`); }
 });
 ipcMain.handle('project:save', async (_event, payload) => {
