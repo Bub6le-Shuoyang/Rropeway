@@ -925,13 +925,24 @@ function syncDialogueNoteDisplay(blockIndex, value) {
   noteNode.textContent = `创作备注：${note}`;
 }
 
+function positionFlowAddActions() {
+  const canvas = document.querySelector('.script-canvas');
+  const actions = document.getElementById('flowAddActions');
+  if (!canvas || !actions) return;
+  const selectedBlock = canvas.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"]`);
+  actions.classList.toggle('empty-scene', !selectedBlock);
+  if (selectedBlock) selectedBlock.insertAdjacentElement('afterend', actions);
+  else canvas.appendChild(actions);
+}
+
 function renderScene() {
   clearSegmentSlideshows();
   const scene = currentScene(); if (!scene) return;
   const canvas = document.querySelector('.script-canvas'); const addButton = document.getElementById('flowAddActions');
+  selectedBlockIndex = Math.min(selectedBlockIndex, Math.max(0, (scene.blocks || []).length - 1));
   canvas.querySelectorAll('.script-block').forEach((block) => block.remove());
   (scene.blocks || []).forEach((block, index) => canvas.insertBefore(createBlockElement(block, index), addButton));
-  selectedBlockIndex = Math.min(selectedBlockIndex, Math.max(0, (scene.blocks || []).length - 1));
+  positionFlowAddActions();
   document.getElementById('sceneTitle').textContent = scene.title;
   document.getElementById('sceneSummary').textContent = scene.blocks?.length ? `${scene.blocks.length} 个内容块` : '空白场景';
   const breadcrumbTitle = document.getElementById('breadcrumbSceneTitle');
@@ -1889,17 +1900,27 @@ navItems.forEach((item) => item.addEventListener('click', () => {
 }));
 function revealNewBlock(blockIndex, focusSelector) {
   requestAnimationFrame(() => {
-    const panel = document.querySelector('.script-panel');
     const block = document.querySelector(`.script-block[data-block-index="${blockIndex}"]`);
-    panel?.scrollTo({ top: panel.scrollHeight, behavior: 'smooth' });
+    block?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     block?.querySelector(focusSelector)?.focus({ preventScroll: true });
   });
+}
+function insertBlockAfterSelection(block) {
+  const scene = currentScene();
+  if (!scene) return -1;
+  scene.blocks ||= [];
+  const selectedIndex = Number.isInteger(selectedBlockIndex) && scene.blocks[selectedBlockIndex] ? selectedBlockIndex : scene.blocks.length - 1;
+  const insertionIndex = selectedIndex + 1;
+  scene.blocks.splice(insertionIndex, 0, block);
+  selectedBlockIndex = insertionIndex;
+  return insertionIndex;
 }
 document.addEventListener('click', (event) => {
   const block = event.target.closest('.script-block');
   if (block) {
     selectedBlockIndex = Number(block.dataset.blockIndex || 0);
     document.querySelectorAll('.script-block').forEach((item) => item.classList.toggle('selected', item === block));
+    positionFlowAddActions();
     renderInspector();
   }
   if (event.target.closest('#addDialogue')) {
@@ -1907,8 +1928,7 @@ document.addEventListener('click', (event) => {
     const character = desktopState.data.characters?.find((item) => item.id === newDialogueCharacterId);
     const dialogue = { id: createContentId('dialogue'), type: 'dialogue', character: '', characterId: '', characterKey: 'mei', characterColor: '#b8bcb8', portraitPreset: null, statusTags: [], voice: '', text: '', textHtml: '', textAlign: 'left' };
     if (character) applyCharacterToBlock(character, dialogue);
-    currentScene().blocks.push(dialogue);
-    selectedBlockIndex = currentScene().blocks.length - 1;
+    insertBlockAfterSelection(dialogue);
     renderScene();
     revealNewBlock(selectedBlockIndex, '.block-content p');
     markDirty();
@@ -1916,8 +1936,7 @@ document.addEventListener('click', (event) => {
   }
   if (event.target.closest('#addChoice')) {
     syncCurrentScene();
-    currentScene().blocks.push({ id: createContentId('choice'), type: 'choice', title: '玩家将如何选择？', options: [{ id: createContentId('choice-option'), text: '', targetBlockId: '' }, { id: createContentId('choice-option'), text: '', targetBlockId: '' }] });
-    selectedBlockIndex = currentScene().blocks.length - 1;
+    insertBlockAfterSelection({ id: createContentId('choice'), type: 'choice', title: '玩家将如何选择？', options: [{ id: createContentId('choice-option'), text: '', targetBlockId: '' }, { id: createContentId('choice-option'), text: '', targetBlockId: '' }] });
     renderScene();
     revealNewBlock(selectedBlockIndex, '.choice-option-text');
     markDirty();
@@ -1925,8 +1944,7 @@ document.addEventListener('click', (event) => {
   }
   if (event.target.closest('#addNarration')) {
     syncCurrentScene();
-    currentScene().blocks.push({ id: createContentId('narration'), type: 'narration', text: '' });
-    selectedBlockIndex = currentScene().blocks.length - 1;
+    insertBlockAfterSelection({ id: createContentId('narration'), type: 'narration', text: '' });
     renderScene();
     revealNewBlock(selectedBlockIndex, '.narration-text');
     markDirty();
@@ -1935,8 +1953,7 @@ document.addEventListener('click', (event) => {
   if (event.target.closest('#addSegment')) {
     syncCurrentScene();
     const segmentNumber = currentScene().blocks.filter((item) => item.type === 'segment').length + 1;
-    currentScene().blocks.push({ id: createContentId('segment'), type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null });
-    selectedBlockIndex = currentScene().blocks.length - 1;
+    insertBlockAfterSelection({ id: createContentId('segment'), type: 'segment', title: `分段 ${segmentNumber}`, perspectiveCharacterId: null });
     renderScene();
     revealNewBlock(selectedBlockIndex, '.segment-title');
     markDirty();
