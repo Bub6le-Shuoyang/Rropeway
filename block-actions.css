@@ -1665,7 +1665,7 @@ body {
 
 .project-home-view,
 .alternate-view:not(.hidden),
-.script-panel,
+.script-panel-scroll,
 .inspector-body {
   overscroll-behavior: contain;
 }
@@ -1693,6 +1693,12 @@ body {
 }
 
 .script-panel {
+  display: flex;
+  flex-direction: column;
+}
+.script-panel-scroll {
+  flex: 1;
+  min-height: 0;
   padding: calc(39px * var(--interface-density)) calc(45px * var(--interface-density)) calc(70px * var(--interface-density)) calc(54px * var(--interface-density));
 }
 
@@ -1703,7 +1709,7 @@ body {
 @media (max-width: 1180px) {
   .topbar { padding-inline: 22px; }
   .project-search { width: min(340px, 42vw); }
-  .script-panel { padding-inline: 28px; }
+  .script-panel-scroll { padding-inline: 28px; }
   .alternate-view:not(.hidden) { padding-inline: 30px; }
 }
 
@@ -1713,13 +1719,13 @@ body {
   .window-menu-button { padding-inline: 7px; }
   .topbar { gap: 16px; padding-inline: 18px; }
   .project-search { width: min(300px, 38vw); }
-  .script-panel { padding: 28px 22px 52px; }
+  .script-panel-scroll { padding: 28px 22px 52px; }
   .alternate-view:not(.hidden) { padding: 30px 24px 50px; }
 }
 
 @media (max-height: 760px) {
   :root { --topbar-height: 62px; }
-  .script-panel { padding-top: 24px; }
+  .script-panel-scroll { padding-top: 24px; }
   .skin-editor-overlay { padding: 12px; }
   .skin-editor-dialog { width: min(960px, calc(var(--interface-viewport-width) - 28px)); height: calc(var(--interface-viewport-height) - 52px); }
   .skin-live-preview { flex-basis: 126px; }
@@ -5142,4 +5148,31 @@ body:not([data-theme="dark"]) .scene-tab.active { background: transparent; }
 body[data-theme="dark"] .script-block.dialogue .dialogue-avatar {
   border-color: color-mix(in srgb, var(--character-color) 45%, #343a3e);
   box-shadow: 0 5px 16px rgba(0, 0, 0, .28);
+}
+
+/* Scene status bar */
+.scene-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 16px;
+  font-size: 11px;
+  line-height: 1;
+  color: #b5afa7;
+  background: transparent;
+  pointer-events: auto;
+  user-select: none;
+  flex-shrink: 0;
+}
+.scene-stat-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.scene-stat-item {
+  white-space: nowrap;
+}
+body[data-theme="dark"] .scene-status-bar {
+  color: #6b7276;
+  background: transparent;
 }

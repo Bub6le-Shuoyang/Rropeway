@@ -52,6 +52,7 @@
 
         <div class="editor-layout">
           <section class="script-panel" id="editorView">
+            <div class="script-panel-scroll">
             <div class="section-title script-heading"><div><div class="eyebrow">SCRIPT EDITOR</div><h2 id="sceneTitle">未命名场景</h2><p class="muted" id="sceneSummary">空白场景</p></div><div class="heading-actions"><button class="primary-button" id="previewBtn">▶ 预览</button></div></div>
             <div class="scene-tabs"></div>
             <div class="script-canvas">
@@ -72,6 +73,16 @@
                 <button class="flow-add-action" id="addItem" type="button" title="插入物品" aria-label="插入物品"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 8 7-4 7 4-7 4-7-4Z"/><path d="m5 8 7 4 7-4v8l-7 4-7-4V8Z"/></svg><small>物品</small></button>
                 <button class="flow-add-action" id="addSegment" type="button" title="添加分段" aria-label="添加分段"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16"/><circle cx="12" cy="12" r="2.5"/></svg><small>分段</small></button>
               </div>
+            </div>
+            </div>
+            <div class="scene-status-bar" id="sceneStatusBar">
+              <span class="scene-stat-left"><span id="sceneWordCountValue">0</span> 字</span>
+              <span class="scene-stat-right">
+                <span class="scene-stat-item" id="statCharacters">0 角色</span>
+                <span class="scene-stat-item" id="statDialogues">0 对话</span>
+                <span class="scene-stat-item" id="statChoices">0 选项</span>
+                <span class="scene-stat-item" id="statNarrations">0 旁白</span>
+              </span>
             </div>
           </section>
 

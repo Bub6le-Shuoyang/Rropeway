@@ -659,6 +659,38 @@ function richTextPlainText(element) {
   clone.querySelectorAll('rt').forEach((annotation) => annotation.remove());
   return clone.textContent.trim();
 }
+function updateSceneWordCount() {
+  const wordEl = document.getElementById('sceneWordCountValue');
+  if (!wordEl) return;
+  let total = 0;
+  const characterIds = new Set();
+  let dialogues = 0, choices = 0, narrations = 0;
+  document.querySelectorAll('.script-block').forEach((block) => {
+    if (block.classList.contains('dialogue')) {
+      dialogues++;
+      const cid = block.dataset.characterId;
+      if (cid) characterIds.add(cid);
+    } else if (block.classList.contains('choice-block')) {
+      choices += block.querySelectorAll('.choice-option-text').length;
+    } else if (block.classList.contains('narration')) {
+      narrations++;
+    }
+    block.querySelectorAll('[contenteditable="true"]').forEach((el) => {
+      if (el.closest('.choice-option-target')) return;
+      const text = richTextPlainText(el);
+      if (text) total += text.length;
+    });
+    block.querySelectorAll('.choice-option-text').forEach((input) => {
+      if (input.value) total += input.value.trim().length;
+    });
+  });
+  wordEl.textContent = total.toLocaleString();
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  set('statCharacters', `${characterIds.size} 角色`);
+  set('statDialogues', `${dialogues} 对话`);
+  set('statChoices', `${choices} 选项`);
+  set('statNarrations', `${narrations} 旁白`);
+}
 function sanitizeRichTextHtml(html) {
   const source = document.createElement('template');
   const output = document.createElement('div');
@@ -2293,7 +2325,7 @@ document.addEventListener('click', (event) => {
 document.getElementById('dialogueCharacterPickerButton')?.addEventListener('click', (event) => { event.stopPropagation(); const menu = document.getElementById('dialogueCharacterMenu'); setDialogueCharacterMenuOpen(Boolean(menu?.hidden)); });
 document.addEventListener('click', (event) => { if (!event.target.closest('#dialogueCharacterPicker')) setDialogueCharacterMenuOpen(false); });
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setDialogueCharacterMenuOpen(false); });
-document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { if (event.target.closest('.segment-title')) renderSegmentNavigator(); markDirty(); } });
+document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { if (event.target.closest('.segment-title')) renderSegmentNavigator(); updateSceneWordCount(); markDirty(); } else if (event.target.classList.contains('choice-option-text')) { updateSceneWordCount(); } });
 document.querySelector('[title="撤销"]')?.addEventListener('click', undoProjectChange);
 document.querySelector('[title="重做"]')?.addEventListener('click', redoProjectChange);
 document.getElementById('addChapter')?.addEventListener('click', () => { const chapters = desktopState.data.chapters; const chapterNumber = chapters.length + 1; const chapter = { id: `chapter-${Date.now()}`, title: `未命名章节 ${chapterNumber}`, status: '草稿', scenes: [{ id: `scene-${Date.now()}`, number: '01', title: '未命名场景', blocks: [] }] }; chapters.push(chapter); expandedChapterIds.add(chapter.id); activeChapterIndex = chapters.length - 1; activeSceneIndex = 0; renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]').click(); markDirty(); showToast('已添加新章节'); });
@@ -3964,7 +3996,7 @@ function openProjectMenu() {
 const baseApplyProject = applyProject;
 applyProject = function (data, filePath = null, options = {}) { baseApplyProject(data, filePath, options); if (filePath) rememberProject(filePath, data.title); else rememberLastProject(null); renderCharacters(); renderInspector(); };
 function updateEditorScrollTools() {
-  const panel = document.querySelector('.script-panel'); const backToTop = document.getElementById('backToTop'); const navigator = document.getElementById('segmentNavigator');
+  const panel = document.querySelector('.script-panel-scroll'); const backToTop = document.getElementById('backToTop'); const navigator = document.getElementById('segmentNavigator');
   if (!panel || !backToTop || !navigator) return;
   backToTop.classList.toggle('hidden', panel.scrollTop < 320);
   const markers = [...navigator.querySelectorAll('.segment-nav-marker')];
@@ -4002,7 +4034,7 @@ async function deleteProjectEntry(project) {
 }
 function renderSegmentNavigator() {
   requestAnimationFrame(() => {
-    const panel = document.querySelector('.script-panel'); const canvas = document.querySelector('.script-canvas'); const navigator = document.getElementById('segmentNavigator');
+    const panel = document.querySelector('.script-panel-scroll'); const canvas = document.querySelector('.script-canvas'); const navigator = document.getElementById('segmentNavigator');
     if (!panel || !canvas || !navigator) return;
     delete navigator.dataset.activeSegmentIndex;
     navigator.replaceChildren();
@@ -4023,13 +4055,13 @@ function renderSegmentNavigator() {
   });
 }
 const baseRenderScene = renderScene;
-renderScene = function () { baseRenderScene(); savedTextRange = null; savedTextBlockIndex = null; savedTextDialogueId = ''; document.querySelectorAll('.block-handle').forEach((handle) => { handle.draggable = true; }); renderInspector(); renderSegmentNavigator(); };
+renderScene = function () { baseRenderScene(); savedTextRange = null; savedTextBlockIndex = null; savedTextDialogueId = ''; document.querySelectorAll('.block-handle').forEach((handle) => { handle.draggable = true; }); renderInspector(); renderSegmentNavigator(); updateSceneWordCount(); };
 const baseRenderImportedAssets = renderImportedAssets;
 renderImportedAssets = function () { baseRenderImportedAssets(); };
 document.getElementById('workspaceSwitcher')?.addEventListener('click', openProjectMenu);
-document.querySelector('.script-panel')?.addEventListener('scroll', updateEditorScrollTools, { passive: true });
-document.querySelector('.script-panel')?.addEventListener('wheel', () => { const navigator = document.getElementById('segmentNavigator'); if (navigator) delete navigator.dataset.activeSegmentIndex; }, { passive: true });
-document.getElementById('backToTop')?.addEventListener('click', () => document.querySelector('.script-panel')?.scrollTo({ top: 0, behavior: 'smooth' }));
+document.querySelector('.script-panel-scroll')?.addEventListener('scroll', updateEditorScrollTools, { passive: true });
+document.querySelector('.script-panel-scroll')?.addEventListener('wheel', () => { const navigator = document.getElementById('segmentNavigator'); if (navigator) delete navigator.dataset.activeSegmentIndex; }, { passive: true });
+document.getElementById('backToTop')?.addEventListener('click', () => document.querySelector('.script-panel-scroll')?.scrollTo({ top: 0, behavior: 'smooth' }));
 window.addEventListener('resize', renderSegmentNavigator);
 document.getElementById('windowMinimize')?.addEventListener('click', () => desktopApi?.minimize()); document.getElementById('windowMaximize')?.addEventListener('click', () => desktopApi?.toggleMaximize()); document.getElementById('windowClose')?.addEventListener('click', () => desktopApi?.closeWindow());
 async function deleteBlock(index) {
