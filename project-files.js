@@ -12,6 +12,7 @@ const REVISIONS_DIRECTORY = 'revisions';
 const COMPONENT_FORMATS = {
   project: 'rropeway-project-metadata',
   characters: 'rropeway-characters',
+  items: 'rropeway-items',
   assets: 'rropeway-assets',
   relationshipGraph: 'rropeway-relationship-graph',
   sceneFlow: 'rropeway-scene-flow',
@@ -92,9 +93,12 @@ async function loadSplitProject(projectPath, manifest) {
   const revision = String(manifest.revision || '');
   if (!revision || !manifest.files) throw new Error('项目索引缺少版本或文件映射。');
 
-  const [metadata, characters, assets, relationshipGraph, sceneFlow, chapterIndex] = await Promise.all([
+  const [metadata, characters, items, assets, relationshipGraph, sceneFlow, chapterIndex] = await Promise.all([
     readComponent(projectPath, manifest.files.project, COMPONENT_FORMATS.project, revision, '项目元数据'),
     readComponent(projectPath, manifest.files.characters, COMPONENT_FORMATS.characters, revision, '角色数据'),
+    manifest.files.items
+      ? readComponent(projectPath, manifest.files.items, COMPONENT_FORMATS.items, revision, '物品数据')
+      : Promise.resolve({ items: [] }),
     readComponent(projectPath, manifest.files.assets, COMPONENT_FORMATS.assets, revision, '素材数据'),
     readComponent(
       projectPath,
@@ -149,6 +153,7 @@ async function loadSplitProject(projectPath, manifest) {
     updatedAt: metadata.updatedAt,
     chapters,
     characters: characters.characters,
+    items: items.items,
     assets: assets.assets,
     relationshipGraph: relationshipGraph.relationshipGraph,
     sceneFlow: sceneFlow.sceneFlow,
@@ -219,6 +224,7 @@ async function writeRevision(stagingPath, rootRelativePath, revision, project) {
   const files = {
     project: toPortablePath(rootRelativePath, 'project.json'),
     characters: toPortablePath(rootRelativePath, 'characters.json'),
+    items: toPortablePath(rootRelativePath, 'items.json'),
     assets: toPortablePath(rootRelativePath, 'assets.json'),
     relationshipGraph: toPortablePath(rootRelativePath, 'relationship-graph.json'),
     sceneFlow: toPortablePath(rootRelativePath, 'scene-flow.json'),
@@ -233,6 +239,9 @@ async function writeRevision(stagingPath, rootRelativePath, revision, project) {
     })),
     writeJson(path.join(stagingPath, 'characters.json'), componentDocument(COMPONENT_FORMATS.characters, revision, {
       characters: project.characters,
+    })),
+    writeJson(path.join(stagingPath, 'items.json'), componentDocument(COMPONENT_FORMATS.items, revision, {
+      items: project.items,
     })),
     writeJson(path.join(stagingPath, 'assets.json'), componentDocument(COMPONENT_FORMATS.assets, revision, {
       assets: project.assets,

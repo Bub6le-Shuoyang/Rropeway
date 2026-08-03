@@ -8,6 +8,7 @@
     <title>Rropeway · 游戏对话脚本编辑器</title>
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./block-actions.css" />
+    <link rel="stylesheet" href="./item-library.css" />
   </head>
   <body><div class="window-chrome"><div class="window-drag-region"><span class="window-brand">✦ Rropeway</span><nav class="window-app-menu" aria-label="应用菜单"><div class="window-menu"><button class="window-menu-button" id="projectMenuButton" type="button" aria-expanded="false">项目</button><div class="window-project-menu hidden" id="windowProjectMenu" hidden><div class="window-menu-label">项目操作</div><button id="newProjectBtn" type="button"><span>新建项目</span><kbd>Ctrl+N</kbd></button><button id="openProjectBtn" type="button"><span>打开项目</span><kbd>Ctrl+O</kbd></button><button id="saveProjectBtn" type="button"><span>保存项目</span><kbd>Ctrl+S</kbd></button><button id="undoProjectBtn" type="button" disabled><span>撤回上一步</span><kbd>Ctrl+Z</kbd></button><div class="window-menu-separator"></div><button id="renameProjectBtn" type="button"><span>重命名项目</span><kbd>F2</kbd></button></div></div><div class="window-menu settings-window-menu" id="settingsMenu"><button class="window-menu-button" id="windowSettingsButton" type="button" aria-expanded="false">设置</button><div class="window-project-menu window-settings-menu hidden" id="windowSettingsMenu" hidden><div class="window-menu-label">主题</div><button class="settings-menu-option" type="button" data-theme-option="light"><span>浅色模式</span><span class="settings-check">✓</span></button><button class="settings-menu-option" type="button" data-theme-option="dark"><span>夜间模式</span><span class="settings-check">✓</span></button><button class="settings-menu-option" type="button" data-theme-option="system"><span>跟随系统</span><span class="settings-check">✓</span></button><div class="window-menu-separator"></div><div class="window-menu-label">界面大小</div><button class="settings-menu-option" type="button" data-scale-option="90"><span>紧凑</span><span class="settings-check">✓</span></button><button class="settings-menu-option" type="button" data-scale-option="100"><span>标准</span><span class="settings-check">✓</span></button><button class="settings-menu-option" type="button" data-scale-option="110"><span>宽松</span><span class="settings-check">✓</span></button><div class="window-menu-separator"></div><div class="window-menu-label">外观</div><button class="settings-menu-option preferences-menu-entry" id="skinEditorBtn" type="button"><span>皮肤编辑</span><span class="settings-menu-arrow">›</span></button><div class="window-menu-separator"></div><div class="window-menu-label">编辑器</div><button class="settings-menu-option preferences-menu-entry" id="editorPreferencesBtn" type="button"><span>偏好设置</span><span class="settings-menu-arrow">›</span></button><button class="settings-menu-option preferences-menu-entry" id="resetWindowLayoutBtn" type="button"><span>恢复默认窗口布局</span><span class="settings-menu-arrow">↺</span></button></div></div><button class="window-menu-button" id="windowHelpButton" type="button">帮助</button></nav></div><div class="window-controls"><button id="windowMinimize" title="最小化">−</button><button id="windowMaximize" title="最大化">□</button><button id="windowClose" title="关闭">×</button></div></div><div class="app-shell">
       <aside class="sidebar" id="sidebar">
@@ -17,6 +18,7 @@
         <nav class="main-nav" aria-label="主导航">
           <button class="nav-item active" data-view="editor" title="剧本编辑器"><span>▤</span>剧本编辑器</button>
           <button class="nav-item" data-view="characters" title="角色与立绘"><span>♧</span>角色与立绘</button>
+          <button class="nav-item" data-view="items" title="物品"><span>◇</span>物品</button>
           <button class="nav-item" data-view="assets" title="素材库"><span>▧</span>素材库</button>
           <button class="nav-item" data-view="checks" title="写作检查"><span>✓</span>写作检查</button>
           <button class="nav-item" data-view="flow" title="流程图"><span>⌘</span>流程图</button>
@@ -67,6 +69,7 @@
                 <button class="flow-add-action" id="addDialogue" type="button" title="添加对话" aria-label="添加对话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5h14v9H9l-4 3v-12Z"/><path d="M8.5 10h7M8.5 13h4.5"/></svg><small>对话</small></button>
                 <button class="flow-add-action" id="addChoice" type="button" title="添加玩家选择" aria-label="添加玩家选择"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6h11M7 12h7M7 18h9"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/><path d="m16 10 3 2-3 2"/></svg><small>选择</small></button>
                 <button class="flow-add-action" id="addNarration" type="button" title="添加旁白" aria-label="添加旁白"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10M7 11h10M7 15h6"/><path d="M5 4.5h14v15H5z"/></svg><small>旁白</small></button>
+                <button class="flow-add-action" id="addItem" type="button" title="插入物品" aria-label="插入物品"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 8 7-4 7 4-7 4-7-4Z"/><path d="m5 8 7 4 7-4v8l-7 4-7-4V8Z"/></svg><small>物品</small></button>
                 <button class="flow-add-action" id="addSegment" type="button" title="添加分段" aria-label="添加分段"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16"/><circle cx="12" cy="12" r="2.5"/></svg><small>分段</small></button>
               </div>
             </div>
@@ -84,11 +87,39 @@
 
         <section class="alternate-view hidden" id="charactersView"></section>
         <section class="alternate-view hidden" id="relationshipsView"></section>
+        <section class="alternate-view hidden" id="itemsView"></section>
         <section class="alternate-view hidden" id="assetsView"><div class="section-title"><div><div class="eyebrow">LOCAL ASSET LIBRARY</div><h2>素材库</h2><p class="muted">所有素材只保存在当前电脑。</p></div><button class="primary-button" id="importAssetsBtn">＋ 导入素材</button></div><div class="asset-grid"></div></section>
         <section class="alternate-view hidden" id="writingChecksView"></section>
         <section class="alternate-view hidden" id="sceneFlowView"></section>
       </main>
     </div>
+    <section class="item-dialogue-editor hidden" id="itemDialogueEditor" aria-hidden="true">
+      <header class="item-dialogue-editor-header">
+        <button class="item-dialogue-editor-back" id="closeItemDialogueEditor" type="button" title="返回剧本编辑器" aria-label="返回剧本编辑器">←</button>
+        <div class="item-dialogue-editor-heading"><span>ITEM DIALOGUE EDITOR</span><h2 id="itemDialogueEditorTitle">物品角色对白</h2><p id="itemDialogueEditorContext">当前场景</p></div>
+        <div class="item-dialogue-editor-count" id="itemDialogueEditorCount">0 条对白</div>
+      </header>
+      <div class="item-dialogue-editor-layout">
+        <main class="item-dialogue-editor-main">
+          <section class="item-investigation-detail">
+            <label for="itemInvestigationDetailInput">调查反应</label>
+            <textarea id="itemInvestigationDetailInput" rows="3" placeholder="输入玩家调查该物品后显示的文案…"></textarea>
+          </section>
+          <section class="item-dialogue-detail-canvas">
+            <div class="item-dialogue-detail-toolbar"><span>角色对白流</span><small>拖动左侧手柄调整顺序</small></div>
+            <div class="item-dialogue-detail-list" id="itemDialogueDetailList"></div>
+            <div class="item-dialogue-detail-add" id="itemDialogueDetailAdd">
+              <select id="itemDialogueNewCharacter" aria-label="设置新增对白角色"></select>
+              <button type="button" id="addItemDialogueDetail">＋ 添加角色对白</button>
+            </div>
+          </section>
+        </main>
+        <aside class="item-dialogue-detail-inspector">
+          <div class="item-dialogue-detail-inspector-header">对白属性</div>
+          <div class="item-dialogue-detail-inspector-body" id="itemDialogueDetailInspector"></div>
+        </aside>
+      </div>
+    </section>
     <div class="toast" id="toast">操作已完成</div>
     <div class="modal hidden" id="previewModal">
       <div class="modal-backdrop"></div>
@@ -111,6 +142,7 @@
     </div>
     <script src="./skin-settings.js"></script>
     <script src="./asset-references.js"></script>
+    <script src="./item-format.js"></script>
     <script src="./story-flow.js"></script>
     <script src="./writing-checks.js"></script>
     <script src="./app.js"></script>

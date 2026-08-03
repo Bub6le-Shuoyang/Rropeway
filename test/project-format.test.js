@@ -145,3 +145,19 @@ test('项目会保存跨章节的场景预览流程', () => {
   assert.deepEqual(project.sceneFlow.positions['scene-c'], { x: 1.3, y: -0.4 });
   assert.deepEqual(project.sceneFlow.transitions, [{ sourceSceneId: 'scene-c', targetSceneId: 'scene-a' }, { sourceSceneId: 'scene-a', targetSceneId: 'scene-b' }]);
 });
+
+test('项目会保存物品库以及每次插入的独立调查反应和角色对白', () => {
+  const project = normalizeProject({
+    items: [{ id: 'item-a', name: '旧怀表', tags: ['线索'], effect: '记录隐藏时间' }],
+    chapters: [{ scenes: [{ blocks: [
+      { id: 'item-block-a', type: 'item', itemId: 'item-a', investigation: { text: '表盖内侧有一道划痕。' }, dialogues: [{ id: 'dialogue-a', characterId: 'character-a', text: '它停在三点十七分。' }] },
+      { id: 'item-block-b', type: 'item', itemId: 'item-a', investigation: { text: '指针已经重新走动。' }, dialogues: [] }
+    ] }] }]
+  });
+  assert.equal(project.items[0].name, '旧怀表');
+  const [first, second] = project.chapters[0].scenes[0].blocks;
+  assert.equal(first.investigation.text, '表盖内侧有一道划痕。');
+  assert.equal(first.dialogues[0].text, '它停在三点十七分。');
+  assert.equal(second.investigation.text, '指针已经重新走动。');
+  assert.notEqual(first.id, second.id);
+});

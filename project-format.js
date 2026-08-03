@@ -1,4 +1,5 @@
 const { normalizeSceneFlow } = require('./story-flow');
+const { normalizeItem, normalizeItemBlock } = require('./item-format');
 
 const DEFAULT_PROJECT = {
   format: 'scriptroom-project',
@@ -11,6 +12,7 @@ const DEFAULT_PROJECT = {
   }],
   characters: [],
   relationshipGraph: { positions: {}, relationships: [], notes: [], viewport: { centerX: 0.5, centerY: 0.5, zoom: 1 } },
+  items: [],
   assets: [],
   updatedAt: new Date().toISOString()
 };
@@ -36,6 +38,7 @@ function normalizeChoiceOption(option, index) {
 }
 function normalizeBlock(block, index = 0) {
   const value = block && typeof block === 'object' ? block : {};
+  if (value.type === 'item') return normalizeItemBlock(value, index, generatedId);
   if (value.type === 'choice') return { id: blockId(value, 'choice', index), type: 'choice', title: String(value.title || ''), options: Array.isArray(value.options) ? value.options.map(normalizeChoiceOption) : [] };
   if (value.type === 'narration') return { id: blockId(value, 'narration', index), type: 'narration', text: String(value.text || '') };
   if (value.type === 'segment') return {
@@ -135,6 +138,7 @@ function normalizeProject(input) {
     chapters: chapters.map((chapter, chapterIndex) => ({ id: String(chapter?.id || `chapter-${Date.now()}-${chapterIndex}`), title: String(chapter?.title || `第 ${chapterIndex + 1} 章`), status: String(chapter?.status || '草稿'), scenes: Array.isArray(chapter?.scenes) ? chapter.scenes.map(normalizeScene) : [] })),
     characters,
     relationshipGraph: normalizeRelationshipGraph(value.relationshipGraph, characters),
+    items: Array.isArray(value.items) ? value.items.map(normalizeItem) : [],
     assets: Array.isArray(value.assets) ? value.assets.map((asset) => ({ id: String(asset?.id || `asset-${Date.now()}`), name: String(asset?.name || '未命名素材'), fileName: String(asset?.fileName || ''), relativePath: String(asset?.relativePath || asset?.fileName || ''), type: String(asset?.type || ''), tags: (Array.isArray(asset?.tags) ? asset.tags : asset?.tag ? [asset.tag] : []).map((tag) => String(tag).trim()).filter((tag, index, tags) => tag && tags.indexOf(tag) === index) })) : [],
     updatedAt: value.updatedAt || new Date().toISOString()
   };

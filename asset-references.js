@@ -11,6 +11,10 @@
       (scene.blocks || []).forEach((block) => {
         if (block.type === 'dialogue' && block.avatar === relativePath) { delete block.avatar; referenceCount += 1; }
         if (block.type === 'dialogue' && block.portrait === relativePath) { delete block.portrait; referenceCount += 1; }
+        if (block.type === 'item') (block.dialogues || []).forEach((dialogue) => {
+          if (dialogue.avatar === relativePath) { delete dialogue.avatar; referenceCount += 1; }
+          if (dialogue.portrait === relativePath) { delete dialogue.portrait; referenceCount += 1; }
+        });
         if (block.type === 'segment' && Array.isArray(block.images)) {
           const remaining = block.images.filter((image) => image.relativePath !== relativePath);
           referenceCount += block.images.length - remaining.length;
@@ -25,6 +29,14 @@
         referenceCount += character[groupName].length - remaining.length;
         character[groupName] = remaining;
       });
+    });
+    (project.items || []).forEach((item) => {
+      if (!Array.isArray(item.images)) return;
+      const remaining = item.images.filter((image) => image?.relativePath !== relativePath);
+      const removedIds = new Set(item.images.filter((image) => image?.relativePath === relativePath).map((image) => image.id));
+      referenceCount += item.images.length - remaining.length;
+      item.images = remaining;
+      if (removedIds.has(item.coverImageId)) item.coverImageId = remaining[0]?.id || '';
     });
     return referenceCount;
   }
@@ -41,10 +53,12 @@
       (scene?.blocks || []).forEach((block) => {
         add(block?.portrait);
         add(block?.avatar);
+        (block?.dialogues || []).forEach((dialogue) => { add(dialogue?.portrait); add(dialogue?.avatar); });
         (block?.images || []).forEach((image) => add(image?.relativePath));
       });
     }));
     (project?.characters || []).forEach((character) => ['avatarGroup', 'portraitGroup', 'portraits'].forEach((groupName) => (character?.[groupName] || []).forEach((item) => add(typeof item === 'string' ? item : item?.relativePath))));
+    (project?.items || []).forEach((item) => (item?.images || []).forEach((image) => add(image?.relativePath)));
     return [...references];
   }
 
