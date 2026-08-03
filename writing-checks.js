@@ -20,6 +20,7 @@
     characters.forEach((character) => {
       [...(character.avatarGroup || []), ...(character.portraitGroup || [])].forEach((media) => { if (media?.relativePath) knownAssetPaths.add(String(media.relativePath)); });
     });
+    (project?.items || []).forEach((item) => (item.images || []).forEach((image) => { if (image?.relativePath) knownAssetPaths.add(String(image.relativePath)); }));
     const criticalNodes = [];
     const assetReferences = [];
     let issueCounter = 0;
@@ -30,6 +31,17 @@
       assetReferences.push({ relativePath: path, label, location });
       if (!knownAssetPaths.has(path)) addIssue({ severity: 'error', category: '失效素材', title: `${label}引用未登记`, detail: path, location });
     };
+    const inspectDialogue = (block, location, chapter, scene) => {
+      const text = plainText(block.textHtml || block.text);
+      if (!text) addIssue({ severity: 'error', category: '空对白', title: '对白内容为空', detail: `${chapter.title} / ${scene.title}`, location });
+      if (!block.characterId && !String(block.character || '').trim()) addIssue({ severity: 'warning', category: '未设置角色', title: '对白没有设置角色', detail: text.slice(0, 36) || `${chapter.title} / ${scene.title}`, location });
+      if (text.length > LONG_DIALOGUE_LENGTH) addIssue({ severity: 'warning', category: '对白过长', title: `对白长度为 ${text.length} 字`, detail: `${text.slice(0, 42)}…`, location });
+      const character = characterById.get(block.characterId) || characterByName.get(block.character);
+      if (character && !block.portrait && !block.portraitPreset && !(character.portraitGroup || []).length && !character.portraitPreset) addIssue({ severity: 'warning', category: '缺少立绘', title: `${character.name} 没有可用立绘`, detail: `${chapter.title} / ${scene.title}`, location });
+      addAssetReference(block.avatar, '对白头像', location);
+      addAssetReference(block.portrait, '对白立绘', location);
+      if ((block.statusTags || []).includes('关键节点')) criticalNodes.push({ id: String(block.id || ''), text, location, chapterTitle: chapter.title, sceneTitle: scene.title });
+    };
 
     chapters.forEach((chapter, chapterIndex) => {
       (chapter.scenes || []).forEach((scene, sceneIndex) => {
@@ -37,17 +49,8 @@
         addAssetReference(scene.background, '场景背景', sceneLocation);
         (scene.blocks || []).forEach((block, blockIndex) => {
           const location = { view: 'editor', chapterIndex, sceneIndex, blockIndex };
-          if (block.type === 'dialogue') {
-            const text = plainText(block.textHtml || block.text);
-            if (!text) addIssue({ severity: 'error', category: '空对白', title: '对白内容为空', detail: `${chapter.title} / ${scene.title}`, location });
-            if (!block.characterId && !String(block.character || '').trim()) addIssue({ severity: 'warning', category: '未设置角色', title: '对白没有设置角色', detail: text.slice(0, 36) || `${chapter.title} / ${scene.title}`, location });
-            if (text.length > LONG_DIALOGUE_LENGTH) addIssue({ severity: 'warning', category: '对白过长', title: `对白长度为 ${text.length} 字`, detail: `${text.slice(0, 42)}…`, location });
-            const character = characterById.get(block.characterId) || characterByName.get(block.character);
-            if (character && !block.portrait && !block.portraitPreset && !(character.portraitGroup || []).length && !character.portraitPreset) addIssue({ severity: 'warning', category: '缺少立绘', title: `${character.name} 没有可用立绘`, detail: `${chapter.title} / ${scene.title}`, location });
-            addAssetReference(block.avatar, '对白头像', location);
-            addAssetReference(block.portrait, '对白立绘', location);
-            if ((block.statusTags || []).includes('关键节点')) criticalNodes.push({ id: String(block.id || ''), text, location, chapterTitle: chapter.title, sceneTitle: scene.title });
-          }
+          if (block.type === 'dialogue') inspectDialogue(block, location, chapter, scene);
+          if (block.type === 'item') (block.dialogues || []).forEach((dialogue) => inspectDialogue(dialogue, { ...location, itemDialogueId: dialogue.id }, chapter, scene));
           if (block.type === 'segment') (block.images || []).forEach((image) => addAssetReference(image.relativePath, '分段图片', location));
         });
       });

@@ -2,9 +2,10 @@ const desktopApi = window.scriptroom;
 const storyFlowTools = window.RropewayStoryFlow;
 const writingCheckTools = window.RropewayWritingChecks;
 const skinSettingsTools = window.RropewaySkinSettings;
+const itemFormatTools = window.RropewayItemFormat;
 desktopApi?.getVersion?.().then((version) => { const label = document.getElementById('appVersion'); if (label) label.textContent = `v${version}`; }).catch(() => {});
 const navItems = document.querySelectorAll('.nav-item');
-const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), relationships: document.getElementById('relationshipsView'), assets: document.getElementById('assetsView'), checks: document.getElementById('writingChecksView'), flow: document.getElementById('sceneFlowView'), home: document.getElementById('projectHomeView') };
+const views = { editor: document.getElementById('editorView'), characters: document.getElementById('charactersView'), relationships: document.getElementById('relationshipsView'), items: document.getElementById('itemsView'), assets: document.getElementById('assetsView'), checks: document.getElementById('writingChecksView'), flow: document.getElementById('sceneFlowView'), home: document.getElementById('projectHomeView') };
 const toast = document.getElementById('toast');
 let desktopState = { filePath: null, data: null, dirty: false };
 const LAST_PROJECT_STORAGE_KEY = 'scriptroom-last-project';
@@ -22,6 +23,9 @@ let suppressDeleteConfirmation = false;
 let newDialogueCharacterId = '';
 let savedTextRange = null;
 let savedTextBlockIndex = null;
+let savedTextDialogueId = '';
+let selectedItemDialogueId = '';
+let itemDialogueEditorState = null;
 let segmentSlideshowTimers = new Set();
 let previewState = null;
 let previewRenderToken = 0;
@@ -30,6 +34,8 @@ let relationshipResizeObserver = null;
 let sceneFlowResizeObserver = null;
 let writingCheckRenderToken = 0;
 let writingCheckFilter = 'all';
+let itemSearchQuery = '';
+let itemTagFilter = '';
 const MIN_SCENE_FLOW_ZOOM = 0.35;
 const MAX_SCENE_FLOW_ZOOM = 2.2;
 const RELATIONSHIP_ZOOM_STORAGE_KEY = 'rropeway-relationship-zoom';
@@ -586,6 +592,28 @@ function captureBlocks() {
       try { options = JSON.parse(block.dataset.choiceOptions || '[]'); } catch {}
       return { id: block.dataset.blockId, type: 'choice', title: block.querySelector('.choice-title')?.textContent.trim() || '', options };
     }
+    if (block.classList.contains('item-block')) {
+      let dialogues = [];
+      try { dialogues = JSON.parse(block.dataset.itemDialogues || '[]'); } catch {}
+      dialogues = dialogues.map((dialogue) => {
+        const entry = block.querySelector(`.item-dialogue-entry[data-dialogue-id="${dialogue.id}"]`);
+        const paragraph = entry?.querySelector('.item-dialogue-text');
+        return {
+          ...dialogue,
+          text: paragraph ? richTextPlainText(paragraph) : dialogue.text || '',
+          textHtml: paragraph ? sanitizeRichTextHtml(paragraph.innerHTML) : dialogue.textHtml || '',
+          textAlign: paragraph?.style.textAlign || dialogue.textAlign || 'left'
+        };
+      });
+      const investigationNode = block.querySelector('.script-item-investigation-text');
+      return {
+        id: block.dataset.blockId,
+        type: 'item',
+        itemId: block.dataset.itemId || '',
+        investigation: { text: investigationNode?.classList.contains('empty') ? '' : investigationNode?.textContent.trim() || '' },
+        dialogues
+      };
+    }
     const paragraph = block.querySelector('.block-content p');
     return { id: block.dataset.blockId, type: 'dialogue', character: block.querySelector('.character-name')?.textContent.trim() || '', characterId: block.dataset.characterId || '', characterKey: 'mei', characterColor: block.dataset.characterColor || '#b8bcb8', portraitPreset: block.dataset.portraitPreset || null, statusTags: [...block.querySelectorAll('.status-pill')].map((tag) => tag.textContent.trim()).filter(Boolean), voice: block.querySelector('.voice-pill')?.textContent.replace(/^♪\s*/, '').trim() || '', text: richTextPlainText(paragraph), textHtml: sanitizeRichTextHtml(paragraph?.innerHTML || ''), textAlign: paragraph?.style.textAlign || 'left', note: block.querySelector('.block-note')?.textContent.replace(/^(?:创作备注|注)：/, '').trim() || '', avatar: block.dataset.avatar || undefined, portrait: block.dataset.portrait || undefined };
   });
@@ -723,18 +751,22 @@ function criticalDialogueNodes() {
   (desktopState.data?.chapters || []).forEach((chapter, chapterIndex) => {
     (chapter.scenes || []).forEach((scene, sceneIndex) => {
       (scene.blocks || []).forEach((block, blockIndex) => {
-        if (block.type !== 'dialogue' || !(block.statusTags || []).includes('关键节点')) return;
-        nodes.push({
-          id: block.id,
-          chapterIndex,
-          chapterId: chapter.id,
-          chapterTitle: chapter.title,
-          sceneIndex,
-          sceneTitle: scene.title,
-          blockIndex,
-          character: block.character || '未设置角色',
-          text: String(block.text || '空对白'),
-          label: `${chapter.title} / ${scene.title} · ${block.character || '未设置角色'}：${String(block.text || '空对白').slice(0, 24)}`
+        const dialogues = block.type === 'dialogue' ? [block] : block.type === 'item' ? block.dialogues || [] : [];
+        dialogues.forEach((dialogue) => {
+          if (!(dialogue.statusTags || []).includes('关键节点')) return;
+          nodes.push({
+            id: dialogue.id,
+            chapterIndex,
+            chapterId: chapter.id,
+            chapterTitle: chapter.title,
+            sceneIndex,
+            sceneTitle: scene.title,
+            blockIndex,
+            itemDialogueId: block.type === 'item' ? dialogue.id : '',
+            character: dialogue.character || '未设置角色',
+            text: String(dialogue.text || '空对白'),
+            label: `${chapter.title} / ${scene.title} · ${dialogue.character || '未设置角色'}：${String(dialogue.text || '空对白').slice(0, 24)}`
+          });
         });
       });
     });
@@ -744,6 +776,7 @@ function criticalDialogueNodes() {
 function navigateToDialogueNode(blockId) {
   const target = criticalDialogueNodes().find((item) => item.id === blockId);
   if (!target) { showToast('关联的关键节点不存在或已取消“关键节点”状态'); return; }
+  selectedItemDialogueId = target.itemDialogueId || '';
   navigateToProjectBlock(target.chapterIndex, target.sceneIndex, target.blockIndex);
 }
 function navigateToProjectBlock(chapterIndex, sceneIndex, blockIndex = 0) {
@@ -812,7 +845,7 @@ function createCriticalNodePicker(parent, option, criticalNodes, onChange) {
   return picker;
 }
 function createBlockElement(block, index) {
-  const blockClass = block.type === 'choice' ? 'choice-block' : block.type === 'segment' ? 'segment-block' : block.type;
+  const blockClass = block.type === 'choice' ? 'choice-block' : block.type === 'segment' ? 'segment-block' : block.type === 'item' ? 'item-block' : block.type;
   const wrapper = node('div', `script-block ${blockClass}${index === selectedBlockIndex ? ' selected' : ''}`);
   wrapper.dataset.blockIndex = String(index);
   wrapper.dataset.blockId = block.id || createContentId(block.type || 'block');
@@ -854,6 +887,47 @@ function createBlockElement(block, index) {
       }
       setupSegmentSlideshow(gallery, images.length);
     }
+  } else if (block.type === 'item') {
+    const item = (desktopState.data?.items || []).find((entry) => entry.id === block.itemId);
+    block.investigation = block.investigation && typeof block.investigation === 'object' ? block.investigation : { text: '' };
+    block.dialogues = Array.isArray(block.dialogues) ? block.dialogues : [];
+    wrapper.dataset.itemId = block.itemId || '';
+    wrapper.dataset.itemDialogues = JSON.stringify(block.dialogues);
+    const visual = addChild(content, 'div', 'script-item-visual');
+    const cover = item?.images?.find((image) => image.id === item.coverImageId) || item?.images?.[0];
+    if (cover?.relativePath && desktopState.filePath) {
+      const image = addChild(visual, 'img'); image.alt = item?.name || '物品';
+      loadProjectImage(cover.relativePath, image, visual);
+    } else addChild(visual, 'span', 'script-item-placeholder', '◇');
+    const copy = addChild(content, 'div', 'script-item-copy');
+    addChild(copy, 'span', 'block-type', '物品');
+    addChild(copy, 'h3', 'script-item-name', item?.name || '物品已失效');
+    if (item?.tags?.length) {
+      const tags = addChild(copy, 'div', 'script-item-tags');
+      item.tags.forEach((tag) => addChild(tags, 'span', '', tag));
+    }
+    if (item?.summary) addChild(copy, 'div', 'script-item-summary', item.summary);
+    const investigation = addChild(copy, 'div', 'script-item-investigation');
+    addChild(investigation, 'span', 'script-item-section-label', '调查反应');
+    const investigationText = addChild(investigation, 'div', `script-item-investigation-text${block.investigation.text ? '' : ' empty'}`, block.investigation.text || '尚未填写调查反应');
+    const dialogueList = addChild(copy, 'div', 'item-dialogue-list item-dialogue-summary-list');
+    const dialogueHeading = addChild(dialogueList, 'div', 'item-dialogue-summary-heading');
+    addChild(dialogueHeading, 'span', 'script-item-section-label', '角色对白');
+    addChild(dialogueHeading, 'small', '', `${block.dialogues.length} 条`);
+    if (!block.dialogues.length) addChild(dialogueList, 'span', 'item-dialogue-empty', '尚未添加角色对白');
+    block.dialogues.slice(0, 2).forEach((dialogue) => {
+      const character = (desktopState.data?.characters || []).find((entry) => entry.id === dialogue.characterId || entry.name === dialogue.character);
+      const entry = addChild(dialogueList, 'div', 'item-dialogue-summary-entry');
+      const avatar = addChild(entry, 'div', 'item-dialogue-summary-avatar', (dialogue.character || character?.name || '?').slice(0, 1)); avatar.style.background = dialogue.characterColor || character?.color || '#b8bcb8';
+      const avatarPath = dialogue.avatar || characterDefaultMedia(character, 'avatarGroup')?.relativePath || '';
+      if (avatarPath && desktopState.filePath) loadProjectImage(avatarPath, (() => { const image = addChild(avatar, 'img'); image.alt = `${dialogue.character || character?.name || '角色'}头像`; return image; })(), avatar);
+      const summary = addChild(entry, 'div', 'item-dialogue-summary-copy');
+      addChild(summary, 'b', '', dialogue.character || character?.name || '未设置角色');
+      addChild(summary, 'span', '', writingCheckTools.plainText(dialogue.textHtml || dialogue.text) || '尚未填写对白');
+    });
+    if (block.dialogues.length > 2) addChild(dialogueList, 'span', 'item-dialogue-summary-more', `另有 ${block.dialogues.length - 2} 条对白`);
+    const editDialogues = addChild(copy, 'button', 'item-dialogue-open-editor', '编辑角色对白'); editDialogues.type = 'button';
+    editDialogues.addEventListener('click', (event) => { event.stopPropagation(); openItemDialogueEditor(block.id); });
   } else if (block.type === 'narration') {
     const paragraph = addChild(content, 'p', 'narration-text', block.text);
     paragraph.dataset.placeholder = '输入旁白内容…';
@@ -1173,6 +1247,200 @@ function renderChapters() {
   });
 }
 
+function itemCoverImage(item) {
+  return item?.images?.find((image) => image.id === item.coverImageId) || item?.images?.[0] || null;
+}
+function itemTagValues() {
+  return [...new Set((desktopState.data?.items || []).flatMap((item) => item.tags || []))].sort((left, right) => left.localeCompare(right, 'zh-CN'));
+}
+function requestItemForm(initial = null) {
+  return new Promise((resolve) => {
+    const overlay = node('div', 'editor-dialog-overlay');
+    const dialog = addChild(overlay, 'div', 'editor-dialog item-editor-dialog');
+    addChild(dialog, 'h3', '', initial ? '编辑物品资料' : '新建物品');
+    const form = addChild(dialog, 'form', 'item-editor-form');
+    const field = (label, value, placeholder, rows = 0) => {
+      const wrapper = addChild(form, 'label', 'item-editor-field'); addChild(wrapper, 'span', '', label);
+      const control = addChild(wrapper, rows ? 'textarea' : 'input', 'editor-dialog-input');
+      control.value = value || ''; control.placeholder = placeholder; if (rows) control.rows = rows;
+      return control;
+    };
+    const name = field('名称', initial?.name, '例如：锈蚀的铜钥匙'); name.maxLength = 80; name.required = true;
+    const tags = field('检索 Tag', (initial?.tags || []).join('，'), '例如：线索，任务，道具');
+    const summary = field('简介', initial?.summary, '物品的外观、来源或基本描述', 3);
+    const effect = field('效果', initial?.effect, '获得、使用或触发后会发生什么', 3);
+    const notes = field('备注', initial?.notes, '仅供创作者查看的补充信息', 3);
+    const actions = addChild(dialog, 'div', 'editor-dialog-actions');
+    const cancel = addChild(actions, 'button', 'file-button', '取消'); cancel.type = 'button';
+    const save = addChild(actions, 'button', 'file-button save', '保存'); save.type = 'submit'; form.appendChild(actions);
+    const close = (value) => { overlay.remove(); resolve(value); };
+    cancel.addEventListener('click', () => close(null));
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const itemName = name.value.trim();
+      if (!itemName) { name.focus(); return; }
+      close({
+        name: itemName,
+        tags: itemFormatTools.uniqueTags(tags.value),
+        summary: summary.value.trim(),
+        effect: effect.value.trim(),
+        notes: notes.value.trim()
+      });
+    });
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
+    document.body.appendChild(overlay); requestAnimationFrame(() => name.focus());
+  });
+}
+async function importItemImages(itemId, refresh) {
+  if (!desktopState.filePath && !(await saveProject())) return;
+  try {
+    const imported = await desktopApi.importItemImages(desktopState.filePath, itemId);
+    if (!imported?.length) return;
+    const item = desktopState.data.items.find((entry) => entry.id === itemId);
+    if (!item) return;
+    item.images ||= [];
+    item.images.push(...imported);
+    if (!item.coverImageId) item.coverImageId = imported[0].id;
+    markDirty(); refresh(); renderItems(); renderScene();
+    showToast(`已导入 ${imported.length} 张物品图片`);
+  } catch (error) { showToast(error.message || '物品图片导入失败'); }
+}
+function openItemImageManager(itemId) {
+  const overlay = node('div', 'editor-dialog-overlay');
+  const dialog = addChild(overlay, 'div', 'editor-dialog item-image-manager-dialog');
+  const header = addChild(dialog, 'div', 'item-manager-header');
+  const title = addChild(header, 'div'); addChild(title, 'h3', '', '物品图片组'); addChild(title, 'p', 'editor-dialog-message', '图片存入该物品专属目录；封面始终排在第一位。');
+  const importButton = addChild(header, 'button', 'primary-button', '＋ 导入图片'); importButton.type = 'button';
+  const grid = addChild(dialog, 'div', 'item-image-manager-grid');
+  const footer = addChild(dialog, 'div', 'editor-dialog-actions'); const closeButton = addChild(footer, 'button', 'file-button save', '完成'); closeButton.type = 'button';
+  const close = () => { overlay.remove(); renderItems(); renderScene(); renderInspector(); };
+  const render = () => {
+    const item = desktopState.data.items.find((entry) => entry.id === itemId);
+    grid.replaceChildren();
+    if (!item) { close(); return; }
+    const images = [...(item.images || [])].sort((left, right) => Number(right.id === item.coverImageId) - Number(left.id === item.coverImageId));
+    if (!images.length) {
+      const empty = addChild(grid, 'div', 'item-image-manager-empty'); addChild(empty, 'b', '', '暂无图片'); addChild(empty, 'span', '', '可一次选择多张图片建立图片组。');
+    }
+    images.forEach((image) => {
+      const card = addChild(grid, 'article', `item-image-manager-card${image.id === item.coverImageId ? ' cover' : ''}`);
+      const visual = addChild(card, 'div', 'item-image-manager-visual'); const imageNode = addChild(visual, 'img'); imageNode.alt = image.name; loadProjectImage(image.relativePath, imageNode, visual);
+      if (image.id === item.coverImageId) addChild(visual, 'span', 'item-cover-badge', '封面');
+      const name = addChild(card, 'b', 'item-image-manager-name', image.name); name.title = image.name;
+      const actions = addChild(card, 'div', 'item-image-manager-actions');
+      const cover = addChild(actions, 'button', 'file-button', image.id === item.coverImageId ? '当前封面' : '设为封面'); cover.type = 'button'; cover.disabled = image.id === item.coverImageId;
+      cover.addEventListener('click', () => { const liveItem = desktopState.data.items.find((entry) => entry.id === itemId); if (!liveItem) return; liveItem.coverImageId = image.id; render(); renderItems(); renderScene(); markDirty(); });
+      const rename = addChild(actions, 'button', 'file-button', '重命名'); rename.type = 'button'; rename.addEventListener('click', async () => { const next = await requestTextInput('图片名称', image.name); if (!next) return; const liveItem = desktopState.data.items.find((entry) => entry.id === itemId); const liveImage = liveItem?.images?.find((entry) => entry.id === image.id); if (!liveImage) return; liveImage.name = next; render(); renderItems(); renderScene(); markDirty(); });
+      const show = addChild(actions, 'button', 'file-button', '源文件'); show.type = 'button'; show.addEventListener('click', () => desktopApi.showItem(desktopState.filePath, image.relativePath));
+      const remove = addChild(actions, 'button', 'file-button danger', '删除'); remove.type = 'button'; remove.addEventListener('click', async () => {
+        if (!(await requestDeleteConfirmation(`确定删除图片“${image.name}”吗？文件会移入回收站。`))) return;
+        try {
+          await desktopApi.deleteAsset(desktopState.filePath, image.relativePath);
+          const liveItem = desktopState.data.items.find((entry) => entry.id === itemId); if (!liveItem) return;
+          liveItem.images = (liveItem.images || []).filter((entry) => entry.id !== image.id);
+          if (liveItem.coverImageId === image.id) liveItem.coverImageId = liveItem.images[0]?.id || '';
+          render(); renderItems(); renderScene(); markDirty();
+        } catch (error) { showToast(error.message || '图片删除失败'); }
+      });
+    });
+  };
+  importButton.addEventListener('click', () => importItemImages(itemId, render));
+  closeButton.addEventListener('click', close); overlay.addEventListener('click', (event) => { if (event.target === overlay) close(); });
+  document.body.appendChild(overlay); render();
+}
+function insertItemReference(item) {
+  if (!item || !currentScene()) return;
+  syncCurrentScene();
+  insertBlockAfterSelection({ id: createContentId('item'), type: 'item', itemId: item.id, investigation: { text: '' }, dialogues: [] });
+  selectedItemDialogueId = '';
+  renderScene(); renderInspector(); markDirty();
+  revealNewBlock(selectedBlockIndex, '.script-item-name');
+  showToast(`已插入物品「${item.name}」`);
+}
+function requestItemSelection() {
+  return new Promise((resolve) => {
+    const overlay = node('div', 'editor-dialog-overlay'); const dialog = addChild(overlay, 'div', 'editor-dialog item-picker-dialog');
+    addChild(dialog, 'h3', '', '插入物品'); addChild(dialog, 'p', 'editor-dialog-message', '搜索并选择项目物品；每次插入都拥有独立的调查反应和角色对白。');
+    const search = addChild(dialog, 'input', 'editor-dialog-input'); search.type = 'search'; search.placeholder = '搜索名称、Tag、简介或效果';
+    const list = addChild(dialog, 'div', 'item-picker-list');
+    const actions = addChild(dialog, 'div', 'editor-dialog-actions'); const cancel = addChild(actions, 'button', 'file-button', '取消'); cancel.type = 'button';
+    const close = (value) => { overlay.remove(); resolve(value); };
+    const render = () => {
+      const query = search.value.trim(); list.replaceChildren();
+      const matches = (desktopState.data.items || []).filter((item) => itemFormatTools.matchesItem(item, query));
+      if (!matches.length) addChild(list, 'div', 'item-picker-empty', '没有匹配的物品');
+      matches.forEach((item) => {
+        const button = addChild(list, 'button', 'item-picker-option'); button.type = 'button';
+        const cover = itemCoverImage(item); const visual = addChild(button, 'span', 'item-picker-option-visual');
+        if (cover?.relativePath && desktopState.filePath) { const image = addChild(visual, 'img'); image.alt = ''; loadProjectImage(cover.relativePath, image, visual); } else visual.textContent = '◇';
+        const copy = addChild(button, 'span', 'item-picker-option-copy'); addChild(copy, 'b', '', item.name); addChild(copy, 'small', '', item.tags?.length ? item.tags.join(' · ') : '未分类');
+        button.addEventListener('click', () => close(item));
+      });
+    };
+    search.addEventListener('input', render); cancel.addEventListener('click', () => close(null)); overlay.addEventListener('click', (event) => { if (event.target === overlay) close(null); });
+    document.body.appendChild(overlay); render(); requestAnimationFrame(() => search.focus());
+  });
+}
+async function deleteProjectItem(item) {
+  if (!(await requestConfirmation(`确定删除物品“${item.name}”吗？\n物品图片会移入回收站，剧本中的该物品引用也会一并移除。`))) return;
+  try {
+    if (desktopState.filePath) await desktopApi.deleteItemStorage(desktopState.filePath, item.id);
+    let removedBlocks = 0;
+    desktopState.data.chapters.forEach((chapter) => chapter.scenes.forEach((scene) => { const before = scene.blocks.length; scene.blocks = scene.blocks.filter((block) => block.type !== 'item' || block.itemId !== item.id); removedBlocks += before - scene.blocks.length; }));
+    desktopState.data.items = desktopState.data.items.filter((entry) => entry.id !== item.id);
+    renderItems(); renderScene(); renderInspector(); markDirty();
+    showToast(removedBlocks ? `物品已删除，并清理 ${removedBlocks} 处剧本引用` : '物品已删除');
+  } catch (error) { showToast(error.message || '物品删除失败'); }
+}
+function renderItems() {
+  const view = views.items; if (!view) return;
+  desktopState.data.items ||= [];
+  view.replaceChildren();
+  const heading = addChild(view, 'div', 'section-title'); const copy = addChild(heading, 'div');
+  addChild(copy, 'div', 'eyebrow', 'ITEM LIBRARY'); addChild(copy, 'h2', '', '物品'); addChild(copy, 'p', 'muted', '管理项目级物品资料、图片组和检索分类。');
+  const create = addChild(heading, 'button', 'primary-button', '＋ 新建物品'); create.type = 'button';
+  create.addEventListener('click', async () => {
+    const values = await requestItemForm(); if (!values) return;
+    const item = itemFormatTools.normalizeItem({ id: createContentId('item'), ...values });
+    desktopState.data.items.push(item); renderItems(); markDirty(); showToast(`已创建物品「${item.name}」`);
+  });
+  const tools = addChild(view, 'div', 'item-library-tools');
+  const search = addChild(tools, 'input', 'item-library-search'); search.type = 'search'; search.placeholder = '搜索物品名称、Tag、简介、效果或备注'; search.value = itemSearchQuery;
+  const filters = addChild(view, 'div', 'item-tag-filters');
+  const renderFilters = () => {
+    filters.replaceChildren();
+    const choices = [['', '全部'], ['__uncategorized__', '未分类'], ...itemTagValues().map((tag) => [tag, tag])];
+    choices.forEach(([value, label]) => { const button = addChild(filters, 'button', `item-tag-filter${itemTagFilter === value ? ' active' : ''}`, label); button.type = 'button'; button.addEventListener('click', () => { itemTagFilter = value; renderItems(); }); });
+  };
+  const grid = addChild(view, 'div', 'item-library-grid');
+  const renderGrid = () => {
+    grid.replaceChildren();
+    const items = desktopState.data.items.filter((item) => itemFormatTools.matchesItem(item, itemSearchQuery, itemTagFilter));
+    if (!items.length) {
+      const empty = addChild(grid, 'div', 'item-library-empty'); addChild(empty, 'b', '', desktopState.data.items.length ? '没有匹配的物品' : '物品库还是空的'); addChild(empty, 'span', '', desktopState.data.items.length ? '调整搜索词或 Tag 筛选。' : '创建物品后，可在任意场景中多次插入并独立设置调查反应与角色对白。');
+      return;
+    }
+    items.forEach((item) => {
+      const card = addChild(grid, 'article', 'item-library-card'); card.dataset.itemId = item.id;
+      const visual = addChild(card, 'div', 'item-library-card-visual'); const cover = itemCoverImage(item);
+      if (cover?.relativePath && desktopState.filePath) { const image = addChild(visual, 'img'); image.alt = item.name; loadProjectImage(cover.relativePath, image, visual); } else addChild(visual, 'span', 'item-library-placeholder', '◇');
+      if (item.images?.length > 1) addChild(visual, 'span', 'item-image-count', `${item.images.length} 张`);
+      const body = addChild(card, 'div', 'item-library-card-body'); addChild(body, 'h3', '', item.name);
+      const tags = addChild(body, 'div', 'item-library-card-tags'); if (item.tags?.length) item.tags.forEach((tag) => addChild(tags, 'span', '', tag)); else addChild(tags, 'span', 'muted-tag', '未分类');
+      if (item.summary) { const row = addChild(body, 'div', 'item-library-detail'); addChild(row, 'b', '', '简介'); addChild(row, 'span', '', item.summary); }
+      if (item.effect) { const row = addChild(body, 'div', 'item-library-detail'); addChild(row, 'b', '', '效果'); addChild(row, 'span', '', item.effect); }
+      if (item.notes) { const row = addChild(body, 'div', 'item-library-detail note'); addChild(row, 'b', '', '备注'); addChild(row, 'span', '', item.notes); }
+      const actions = addChild(card, 'div', 'item-library-card-actions');
+      const images = addChild(actions, 'button', 'file-button', `图片组 ${item.images?.length || 0}`); images.type = 'button'; images.addEventListener('click', () => openItemImageManager(item.id));
+      const edit = addChild(actions, 'button', 'file-button', '编辑资料'); edit.type = 'button'; edit.addEventListener('click', async () => { const values = await requestItemForm(item); if (!values) return; Object.assign(item, values); renderItems(); renderScene(); markDirty(); });
+      const insert = addChild(actions, 'button', 'file-button save', '插入剧本'); insert.type = 'button'; insert.addEventListener('click', () => { document.querySelector('[data-view="editor"]')?.click(); insertItemReference(item); });
+      const remove = addChild(actions, 'button', 'file-button danger', '删除'); remove.type = 'button'; remove.addEventListener('click', () => deleteProjectItem(item));
+    });
+  };
+  search.addEventListener('input', () => { itemSearchQuery = search.value; renderGrid(); });
+  renderFilters(); renderGrid();
+}
+
 function renderImportedAssets() {
   const grid = document.querySelector('.asset-grid'); if (!grid) return; grid.replaceChildren();
   const assets = desktopState.data?.assets || [];
@@ -1313,7 +1581,7 @@ async function renameProject() {
   markDirty();
   showToast(`项目已重命名为「${normalizedTitle}」`);
 }
-function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; document.body.classList.remove('project-home-active'); views.home?.classList.add('hidden'); desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); updateProjectFolderAction(); document.querySelector('[data-view="editor"]')?.click(); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
+function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; itemDialogueEditorState = null; document.getElementById('itemDialogueEditor')?.classList.add('hidden'); document.body.classList.remove('item-dialogue-editor-open'); document.body.classList.remove('project-home-active'); views.home?.classList.add('hidden'); desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); updateProjectFolderAction(); document.querySelector('[data-view="editor"]')?.click(); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
 function applyOpenedProjectResult(result, successMessage = '') {
   applyProject(result.data, result.filePath);
   if (result.recoveredFromBackup) {
@@ -1482,6 +1750,18 @@ function previewCharacterId(block) {
   if (block.characterId) return block.characterId;
   return desktopState.data?.characters?.find((character) => character.name === block.character)?.id || '';
 }
+function previewDirectDialoguePortraitSpec(dialogue) {
+  const characterId = previewCharacterId(dialogue);
+  if (!characterId) return null;
+  const character = desktopState.data?.characters?.find((item) => item.id === characterId);
+  const defaultPortrait = characterDefaultMedia(character, 'portraitGroup');
+  return {
+    name: character?.name || dialogue.character || '',
+    portrait: dialogue.portrait || defaultPortrait?.relativePath || '',
+    portraitPreset: (dialogue.portrait || defaultPortrait) ? null : dialogue.portraitPreset || character?.portraitPreset || null,
+    color: dialogue.characterColor || character?.color || '#f2674f'
+  };
+}
 function previewPortraitSpec(scene, characterId, blockIndex) {
   if (!characterId) return null;
   const character = desktopState.data?.characters?.find((item) => item.id === characterId);
@@ -1538,8 +1818,12 @@ function previewLocationForBlockId(blockId) {
   for (let chapterIndex = 0; chapterIndex < (desktopState.data?.chapters || []).length; chapterIndex += 1) {
     const chapter = desktopState.data.chapters[chapterIndex];
     for (let sceneIndex = 0; sceneIndex < (chapter.scenes || []).length; sceneIndex += 1) {
-      const blockIndex = (chapter.scenes[sceneIndex].blocks || []).findIndex((block) => block.id === blockId);
-      if (blockIndex >= 0) return { chapterIndex, sceneIndex, blockIndex };
+      const blocks = chapter.scenes[sceneIndex].blocks || [];
+      const blockIndex = blocks.findIndex((block) => block.id === blockId || (block.type === 'item' && (block.dialogues || []).some((dialogue) => dialogue.id === blockId)));
+      if (blockIndex >= 0) {
+        const itemDialogueIndex = blocks[blockIndex].type === 'item' ? (blocks[blockIndex].dialogues || []).findIndex((dialogue) => dialogue.id === blockId) : -1;
+        return { chapterIndex, sceneIndex, blockIndex, itemDialogueIndex };
+      }
     }
   }
   return null;
@@ -1548,7 +1832,7 @@ function previewLocationInScope(location) {
   return previewState?.scope !== 'chapter' || location?.chapterIndex === previewState.scopeChapterIndex;
 }
 function setPreviewScene(location, options = {}) {
-  previewState = { ...options, chapterIndex: location.chapterIndex, sceneIndex: location.sceneIndex, blockIndex: location.blockIndex || 0, mode: 'playing' };
+  previewState = { ...options, chapterIndex: location.chapterIndex, sceneIndex: location.sceneIndex, blockIndex: location.blockIndex || 0, itemDialogueIndex: -1, mode: 'playing' };
   if (!(previewSceneData()?.blocks || []).length) previewState.mode = 'scene-end';
   renderPreviewFrame();
 }
@@ -1582,8 +1866,13 @@ function advanceScenePreview(fromChoice = false) {
     return;
   }
   if (previewBlockData()?.type === 'choice' && !fromChoice) return;
+  if (previewBlockData()?.type === 'item') {
+    const dialogues = previewBlockData().dialogues || [];
+    if ((previewState.itemDialogueIndex ?? -1) < dialogues.length - 1) { previewState.itemDialogueIndex = (previewState.itemDialogueIndex ?? -1) + 1; renderPreviewFrame(); return; }
+    previewState.itemDialogueIndex = -1;
+  }
   const blocks = previewSceneData()?.blocks || [];
-  if (previewState.blockIndex + 1 < blocks.length) previewState.blockIndex += 1;
+  if (previewState.blockIndex + 1 < blocks.length) { previewState.blockIndex += 1; previewState.itemDialogueIndex = -1; }
   else previewState.mode = 'scene-end';
   renderPreviewFrame();
 }
@@ -1620,11 +1909,16 @@ function renderPreviewFrame() {
     renderPreviewPortrait(document.getElementById('previewCharacterRight'), 'right', null, false, renderToken);
     return;
   }
+  const itemDialogue = block?.type === 'item' && previewState.itemDialogueIndex >= 0 ? block.dialogues?.[previewState.itemDialogueIndex] : null;
+  const displayBlock = itemDialogue || block;
   const perspectiveCharacterId = previewPerspectiveCharacterId(scene, previewState.blockIndex);
-  const currentCharacterId = previewCharacterId(block);
+  const currentCharacterId = previewCharacterId(displayBlock);
   const otherCharacterId = previewOtherCharacterId(scene, previewState.blockIndex, perspectiveCharacterId);
-  renderPreviewPortrait(document.getElementById('previewCharacterRight'), 'right', previewPortraitSpec(scene, perspectiveCharacterId, previewState.blockIndex), currentCharacterId === perspectiveCharacterId, renderToken);
-  renderPreviewPortrait(document.getElementById('previewCharacterLeft'), 'left', previewPortraitSpec(scene, otherCharacterId || (!perspectiveCharacterId ? currentCharacterId : ''), previewState.blockIndex), currentCharacterId && currentCharacterId !== perspectiveCharacterId, renderToken);
+  const currentPortraitSpec = itemDialogue ? previewDirectDialoguePortraitSpec(itemDialogue) : previewPortraitSpec(scene, currentCharacterId, previewState.blockIndex);
+  const rightPortraitSpec = currentCharacterId && currentCharacterId === perspectiveCharacterId ? currentPortraitSpec : previewPortraitSpec(scene, perspectiveCharacterId, previewState.blockIndex);
+  const leftPortraitSpec = currentCharacterId && currentCharacterId !== perspectiveCharacterId ? currentPortraitSpec : previewPortraitSpec(scene, otherCharacterId || (!perspectiveCharacterId ? currentCharacterId : ''), previewState.blockIndex);
+  renderPreviewPortrait(document.getElementById('previewCharacterRight'), 'right', rightPortraitSpec, currentCharacterId === perspectiveCharacterId, renderToken);
+  renderPreviewPortrait(document.getElementById('previewCharacterLeft'), 'left', leftPortraitSpec, currentCharacterId && currentCharacterId !== perspectiveCharacterId, renderToken);
   if (block?.type === 'segment') {
     dialogue.classList.add('hidden'); segmentCard.classList.remove('hidden');
     document.getElementById('previewSegmentTitle').textContent = block.title || '未命名分段';
@@ -1632,9 +1926,9 @@ function renderPreviewFrame() {
     document.getElementById('previewSegmentPerspective').textContent = perspective ? `主视角 · ${perspective.name}` : '未设置主视角';
     return;
   }
-  if (block?.type === 'dialogue') {
-    speaker.textContent = block.character || '未设置角色';
-    if (block.textHtml) text.innerHTML = sanitizeRichTextHtml(block.textHtml); else text.textContent = block.text || '……';
+  if (displayBlock?.type === 'dialogue') {
+    speaker.textContent = displayBlock.character || desktopState.data.characters?.find((character) => character.id === displayBlock.characterId)?.name || '未设置角色';
+    if (displayBlock.textHtml) text.innerHTML = sanitizeRichTextHtml(displayBlock.textHtml); else text.textContent = displayBlock.text || '……';
   } else if (block?.type === 'narration') {
     dialogue.classList.add('narration'); speaker.textContent = '旁白'; text.textContent = block.text || '……';
   } else if (block?.type === 'choice') {
@@ -1645,11 +1939,16 @@ function renderPreviewFrame() {
       button.addEventListener('click', (event) => {
         event.stopPropagation();
         const target = value.targetBlockId ? previewLocationForBlockId(value.targetBlockId) : null;
-        if (target && previewLocationInScope(target)) { previewState = { ...previewState, ...target, mode: 'playing' }; renderPreviewFrame(); }
+        if (target && previewLocationInScope(target)) { previewState = { ...previewState, ...target, itemDialogueIndex: target.itemDialogueIndex ?? -1, mode: 'playing' }; renderPreviewFrame(); }
         else if (target) { showToast('该选项指向其他章节，本次章节预览将继续播放当前章节'); advanceScenePreview(true); }
         else advanceScenePreview(true);
       });
     });
+  } else if (block?.type === 'item') {
+    const item = (desktopState.data.items || []).find((entry) => entry.id === block.itemId);
+    dialogue.classList.add('item-preview');
+    speaker.textContent = item ? `调查 · ${item.name}` : '物品已失效';
+    text.textContent = block.investigation?.text || item?.summary || '尚未填写调查反应。';
   } else text.textContent = '当前内容暂不支持预览。';
 }
 
@@ -1666,7 +1965,7 @@ function writingIssueLocationLabel(issue) {
 }
 function navigateToWritingIssue(issue) {
   const location = issue.location || {};
-  if (location.view === 'editor') { navigateToProjectBlock(location.chapterIndex, location.sceneIndex, location.blockIndex); return; }
+  if (location.view === 'editor') { selectedItemDialogueId = location.itemDialogueId || ''; navigateToProjectBlock(location.chapterIndex, location.sceneIndex, location.blockIndex); return; }
   if (location.view === 'characters') {
     document.querySelector('[data-view="characters"]')?.click();
     requestAnimationFrame(() => document.querySelector(`.character-card[data-character-id="${location.characterId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
@@ -1905,6 +2204,7 @@ function renderSceneFlow() {
 
 navItems.forEach((item) => item.addEventListener('click', () => {
   if (!desktopState.data) { showToast('请先创建或打开项目'); return; }
+  if (itemDialogueEditorState) closeItemDialogueEditor();
   const target = item.dataset.view;
   relationshipResizeObserver?.disconnect();
   relationshipResizeObserver = null;
@@ -1912,13 +2212,13 @@ navItems.forEach((item) => item.addEventListener('click', () => {
   sceneFlowResizeObserver = null;
   navItems.forEach((nav) => nav.classList.toggle('active', nav === item));
   document.querySelector('.editor-layout').classList.toggle('hidden', target !== 'editor');
-  views.characters.classList.toggle('hidden', target !== 'characters'); views.relationships?.classList.add('hidden'); views.assets.classList.toggle('hidden', target !== 'assets'); views.checks?.classList.toggle('hidden', target !== 'checks'); views.flow?.classList.toggle('hidden', target !== 'flow');
+  views.characters.classList.toggle('hidden', target !== 'characters'); views.relationships?.classList.add('hidden'); views.items?.classList.toggle('hidden', target !== 'items'); views.assets.classList.toggle('hidden', target !== 'assets'); views.checks?.classList.toggle('hidden', target !== 'checks'); views.flow?.classList.toggle('hidden', target !== 'flow');
   document.getElementById('floatingInspectorLayer')?.classList.toggle('hidden', target !== 'editor');
   const breadcrumb = document.querySelector('.breadcrumb'); const separator = breadcrumb?.querySelector('span:nth-child(2)'); const detail = breadcrumb?.querySelector('strong');
-  const breadcrumbTitles = { characters: '角色与立绘', assets: '项目素材库', checks: '写作检查', flow: '全项目流程图', editor: '剧本编辑器' };
+  const breadcrumbTitles = { characters: '角色与立绘', items: '项目物品库', assets: '项目素材库', checks: '写作检查', flow: '全项目流程图', editor: '剧本编辑器' };
   breadcrumb?.querySelector('span:first-child')?.replaceChildren(document.createTextNode(breadcrumbTitles[target] || '剧本编辑器'));
   if (separator) separator.hidden = target !== 'editor'; if (detail) detail.hidden = target !== 'editor';
-  if (target === 'characters') renderCharacters(); if (target === 'assets') renderImportedAssets(); if (target === 'checks') renderWritingChecks(); if (target === 'flow') renderSceneFlow();
+  if (target === 'characters') renderCharacters(); if (target === 'items') renderItems(); if (target === 'assets') renderImportedAssets(); if (target === 'checks') renderWritingChecks(); if (target === 'flow') renderSceneFlow();
 }));
 function revealNewBlock(blockIndex, focusSelector) {
   requestAnimationFrame(() => {
@@ -1971,6 +2271,14 @@ document.addEventListener('click', (event) => {
     revealNewBlock(selectedBlockIndex, '.narration-text');
     markDirty();
     showToast('已添加一条旁白');
+  }
+  if (event.target.closest('#addItem')) {
+    if (!(desktopState.data.items || []).length) {
+      showToast('请先在物品页创建物品');
+      document.querySelector('[data-view="items"]')?.click();
+      return;
+    }
+    requestItemSelection().then((item) => { if (item) insertItemReference(item); });
   }
   if (event.target.closest('#addSegment')) {
     syncCurrentScene();
@@ -2474,14 +2782,28 @@ function collectProjectSearchResults(query) {
     (chapter.scenes || []).forEach((scene, sceneIndex) => {
       if (matches(scene.title, scene.number)) results.push({ type: '场景', title: scene.title, detail: chapter.title, view: 'editor', chapterIndex, sceneIndex });
       (scene.blocks || []).forEach((block, blockIndex) => {
-        const text = projectSearchText(block.textHtml || block.text || block.title || '');
+        const linkedItem = block.type === 'item' ? (desktopState.data.items || []).find((item) => item.id === block.itemId) : null;
+        if (block.type === 'item') {
+          if (matches(linkedItem?.name, linkedItem?.summary, linkedItem?.effect, linkedItem?.notes, block.investigation?.text, ...(linkedItem?.tags || []))) {
+            results.push({ type: '物品引用', title: linkedItem?.name || '物品已失效', detail: `${chapter.title} / ${scene.title}`, view: 'editor', chapterIndex, sceneIndex, blockIndex });
+          }
+          (block.dialogues || []).forEach((dialogue) => {
+            const dialogueText = projectSearchText(dialogue.textHtml || dialogue.text || '');
+            if (!matches(dialogueText, dialogue.character, dialogue.note, ...(dialogue.statusTags || []))) return;
+            results.push({ type: '物品对白', title: dialogueText || dialogue.character || '未命名对白', detail: `${chapter.title} / ${scene.title} · ${linkedItem?.name || '物品'}`, view: 'editor', chapterIndex, sceneIndex, blockIndex, itemDialogueId: dialogue.id });
+          });
+          return;
+        }
+        const text = projectSearchText(block.textHtml || block.text || block.title || linkedItem?.name || '');
         const tags = (block.statusTags || []).join(' ');
-        if (!matches(text, block.character, tags, block.note)) return;
-        results.push({ type: block.type === 'segment' ? '分段' : '对白', title: text || block.character || '未命名内容', detail: `${chapter.title} / ${scene.title}${block.character ? ` · ${block.character}` : ''}`, view: 'editor', chapterIndex, sceneIndex, blockIndex });
+        if (!matches(text, block.character, tags, block.note, linkedItem?.summary, ...(linkedItem?.tags || []))) return;
+        const resultType = block.type === 'segment' ? '分段' : block.type === 'item' ? '物品引用' : block.type === 'choice' ? '选择' : block.type === 'narration' ? '旁白' : '对白';
+        results.push({ type: resultType, title: text || block.character || '未命名内容', detail: `${chapter.title} / ${scene.title}${block.character ? ` · ${block.character}` : ''}`, view: 'editor', chapterIndex, sceneIndex, blockIndex });
       });
     });
   });
   (desktopState.data.characters || []).forEach((character) => { if (matches(character.name, character.role, character.description)) results.push({ type: '角色', title: character.name, detail: character.role || '未设置定位', view: 'characters', characterId: character.id }); });
+  (desktopState.data.items || []).forEach((item) => { if (matches(item.name, item.summary, item.effect, item.notes, ...(item.tags || []))) results.push({ type: '物品', title: item.name, detail: item.tags?.length ? item.tags.join(' · ') : '未分类', view: 'items', itemId: item.id }); });
   (desktopState.data.assets || []).forEach((asset) => { if (matches(asset.name, asset.fileName, asset.type)) results.push({ type: '素材', title: asset.name, detail: asset.fileName || asset.type, view: 'assets', assetId: asset.id }); });
   return results.slice(0, 24);
 }
@@ -2494,11 +2816,12 @@ function setProjectSearchResultsOpen(open) {
 function navigateToProjectSearchResult(result) {
   if (result.view === 'editor') {
     syncCurrentScene(); activeChapterIndex = result.chapterIndex; activeSceneIndex = result.sceneIndex; selectedBlockIndex = result.blockIndex ?? 0;
+    selectedItemDialogueId = result.itemDialogueId || '';
     expandedChapterIds.add(currentChapter().id); renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]')?.click();
     if (Number.isInteger(result.blockIndex)) requestAnimationFrame(() => document.querySelector(`.script-block[data-block-index="${result.blockIndex}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
   } else {
     document.querySelector(`[data-view="${result.view}"]`)?.click();
-    requestAnimationFrame(() => document.querySelector(result.characterId ? `[data-character-id="${result.characterId}"]` : `[data-asset-id="${result.assetId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+    requestAnimationFrame(() => document.querySelector(result.characterId ? `[data-character-id="${result.characterId}"]` : result.itemId ? `[data-item-id="${result.itemId}"]` : `[data-asset-id="${result.assetId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
   }
   setProjectSearchResultsOpen(false);
 }
@@ -2537,6 +2860,9 @@ if (desktopApi) initializeProject();
 // Interactive editor layer: characters, inspector controls, drag sorting and project switcher.
 let draggedBlockIndex = null;
 function activeDialogueBlock() { const scene = currentScene(); const block = scene?.blocks?.[selectedBlockIndex]; return block?.type === 'dialogue' ? block : null; }
+function activeItemBlock() { if (itemDialogueEditorState) return itemDialogueEditorBlock(); const block = currentScene()?.blocks?.[selectedBlockIndex]; return block?.type === 'item' ? block : null; }
+function activeItemDialogueBlock() { return activeItemBlock()?.dialogues?.find((dialogue) => dialogue.id === selectedItemDialogueId) || null; }
+function activeTextDialogueBlock() { return activeDialogueBlock() || activeItemDialogueBlock(); }
 function setInspectorSectionFloating(sectionKey, floating) {
   const keys = new Set(layoutPreferences.floatingSections);
   if (floating) keys.add(sectionKey); else keys.delete(sectionKey);
@@ -2603,35 +2929,43 @@ function createInspectorSection(body, title, description = '', sectionKey = '') 
   }
   return section;
 }
-function selectedDialogueParagraph() { return document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .block-content p[contenteditable="true"]`); }
+function selectedDialogueParagraph() {
+  if (itemDialogueEditorState && selectedItemDialogueId) return document.querySelector(`.item-dialogue-detail-card[data-dialogue-id="${selectedItemDialogueId}"] .block-content p[contenteditable="true"]`);
+  if (activeItemBlock() && selectedItemDialogueId) return document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .item-dialogue-entry[data-dialogue-id="${selectedItemDialogueId}"] .item-dialogue-text[contenteditable="true"]`);
+  return document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"] .block-content p[contenteditable="true"]`);
+}
 function rememberTextSelection() {
   const selection = window.getSelection();
   if (!selection?.rangeCount) return;
   const range = selection.getRangeAt(0);
   const container = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
-  const paragraph = container?.closest?.('.script-block.dialogue .block-content p[contenteditable="true"]');
+  const paragraph = container?.closest?.('.script-block.dialogue .block-content p[contenteditable="true"], .item-dialogue-text[contenteditable="true"]');
   if (!paragraph) return;
   savedTextRange = range.cloneRange();
   savedTextBlockIndex = Number(paragraph.closest('.script-block').dataset.blockIndex);
+  savedTextDialogueId = paragraph.closest('.item-dialogue-entry, .item-dialogue-detail-card')?.dataset.dialogueId || '';
 }
 function restoreTextSelection(paragraph) {
   const selection = window.getSelection();
   selection.removeAllRanges();
-  if (savedTextRange && savedTextBlockIndex === selectedBlockIndex && (paragraph === savedTextRange.commonAncestorContainer || paragraph.contains(savedTextRange.commonAncestorContainer))) selection.addRange(savedTextRange);
+  const dialogueId = paragraph.closest('.item-dialogue-entry, .item-dialogue-detail-card')?.dataset.dialogueId || '';
+  const activeBlockIndex = itemDialogueEditorState ? Number(paragraph.closest('.script-block')?.dataset.blockIndex) : selectedBlockIndex;
+  if (savedTextRange && savedTextBlockIndex === activeBlockIndex && savedTextDialogueId === dialogueId && (paragraph === savedTextRange.commonAncestorContainer || paragraph.contains(savedTextRange.commonAncestorContainer))) selection.addRange(savedTextRange);
   else { const range = document.createRange(); range.selectNodeContents(paragraph); selection.addRange(range); }
 }
 function applyInlineTextFormat(command, value = null) {
-  const block = activeDialogueBlock(); const paragraph = selectedDialogueParagraph();
+  const block = activeTextDialogueBlock(); const paragraph = selectedDialogueParagraph();
   if (!block || !paragraph) return;
   paragraph.focus(); restoreTextSelection(paragraph);
   document.execCommand(command, false, value);
   block.text = richTextPlainText(paragraph);
   block.textHtml = sanitizeRichTextHtml(paragraph.innerHTML);
   rememberTextSelection();
+  if (itemDialogueEditorState) syncItemInstanceSummary(activeItemBlock());
   markDirty();
 }
 async function applyRubyAnnotation() {
-  const block = activeDialogueBlock(); const paragraph = selectedDialogueParagraph();
+  const block = activeTextDialogueBlock(); const paragraph = selectedDialogueParagraph();
   if (!block || !paragraph) return;
   paragraph.focus(); restoreTextSelection(paragraph);
   const selection = window.getSelection();
@@ -2648,17 +2982,19 @@ async function applyRubyAnnotation() {
   block.text = richTextPlainText(paragraph);
   block.textHtml = sanitizeRichTextHtml(paragraph.innerHTML);
   rememberTextSelection();
+  if (itemDialogueEditorState) syncItemInstanceSummary(activeItemBlock());
   markDirty();
 }
 function applyParagraphAlignment(alignment) {
-  const block = activeDialogueBlock(); const paragraph = selectedDialogueParagraph();
+  const block = activeTextDialogueBlock(); const paragraph = selectedDialogueParagraph();
   if (!block || !paragraph) return;
   block.textAlign = alignment;
   paragraph.style.textAlign = alignment;
+  if (itemDialogueEditorState) syncItemInstanceSummary(activeItemBlock());
   markDirty();
 }
-function renderTextFormattingSettings(body, block) {
-  const section = createInspectorSection(body, '文字编辑器', '选中对白文字后设置格式；未选中文字时会应用到整条对白。', 'text');
+function renderTextFormattingSettings(body, block, options = {}) {
+  const section = createInspectorSection(body, '文字编辑器', '选中对白文字后设置格式；未选中文字时会应用到整条对白。', options.sectionKey === undefined ? 'text' : options.sectionKey);
   if (!block) { section.classList.add('disabled'); addChild(section, 'div', 'inspector-empty compact', '请选择一条对白后使用文字格式。'); return; }
   const toolbar = addChild(section, 'div', 'text-format-toolbar');
   const addCommandButton = (label, title, command) => { const button = addChild(toolbar, 'button', 'text-format-button', label); button.type = 'button'; button.title = title; button.addEventListener('mousedown', (event) => event.preventDefault()); button.addEventListener('click', () => applyInlineTextFormat(command)); return button; };
@@ -2680,7 +3016,7 @@ function renderTextFormattingSettings(body, block) {
   const highlightLabel = addChild(toolbar, 'label', 'text-color-control text-highlight-control'); addChild(highlightLabel, 'span', '', '▰');
   const highlightInput = addChild(highlightLabel, 'input'); highlightInput.type = 'color'; highlightInput.value = '#ffe1a8'; highlightInput.title = '文字高亮'; highlightInput.addEventListener('input', () => applyInlineTextFormat('hiliteColor', highlightInput.value));
   const alignment = addChild(section, 'div', 'text-alignment-row');
-  [['left', '左对齐'], ['center', '居中'], ['right', '右对齐']].forEach(([value, title]) => { const button = addChild(alignment, 'button', `text-align-button${(block.textAlign || 'left') === value ? ' active' : ''}`, value === 'left' ? '≡' : value === 'center' ? '≣' : '≡'); button.type = 'button'; button.title = title; if (value === 'right') button.classList.add('align-right-icon'); button.addEventListener('click', () => { applyParagraphAlignment(value); renderInspector(); }); });
+  [['left', '左对齐'], ['center', '居中'], ['right', '右对齐']].forEach(([value, title]) => { const button = addChild(alignment, 'button', `text-align-button${(block.textAlign || 'left') === value ? ' active' : ''}`, value === 'left' ? '≡' : value === 'center' ? '≣' : '≡'); button.type = 'button'; button.title = title; if (value === 'right') button.classList.add('align-right-icon'); button.addEventListener('click', () => { applyParagraphAlignment(value); if (itemDialogueEditorState) renderItemDialogueEditorInspector(); else renderInspector(); }); });
   const clear = addChild(alignment, 'button', 'text-clear-button', '清除格式'); clear.type = 'button'; clear.addEventListener('mousedown', (event) => event.preventDefault()); clear.addEventListener('click', () => applyInlineTextFormat('removeFormat'));
 }
 document.addEventListener('selectionchange', rememberTextSelection);
@@ -2748,6 +3084,281 @@ function renderSegmentImageSettings(section, segment) {
     refreshSegmentImages('已从素材库添加图片');
   });
 }
+function createEmptyItemDialogue() {
+  const dialogue = itemFormatTools.normalizeItemDialogue({ id: createContentId('item-dialogue') });
+  const character = desktopState.data.characters?.find((item) => item.id === newDialogueCharacterId);
+  if (character) applyCharacterToBlock(character, dialogue);
+  return dialogue;
+}
+function syncItemDialogueDataset(itemBlock) {
+  const wrapper = document.querySelector(`.script-block[data-block-id="${itemBlock.id}"]`);
+  if (wrapper) wrapper.dataset.itemDialogues = JSON.stringify(itemBlock.dialogues || []);
+}
+function renderItemDialogueSettings(body, itemBlock, options = {}) {
+  const refresh = options.refresh || (() => { renderScene(); renderInspector(); });
+  const focusSelected = options.focusSelected || (() => requestAnimationFrame(() => selectedDialogueParagraph()?.focus()));
+  itemBlock.dialogues ||= [];
+  if (!itemBlock.dialogues.some((dialogue) => dialogue.id === selectedItemDialogueId)) selectedItemDialogueId = itemBlock.dialogues[0]?.id || '';
+  const section = createInspectorSection(body, '角色对白', '每次物品插入拥有独立对白；在左侧直接编辑文字。');
+  const navigation = addChild(section, 'div', 'item-dialogue-inspector-tabs');
+  itemBlock.dialogues.forEach((dialogue, index) => {
+    const character = desktopState.data.characters?.find((item) => item.id === dialogue.characterId || item.name === dialogue.character);
+    const button = addChild(navigation, 'button', `item-dialogue-inspector-tab${dialogue.id === selectedItemDialogueId ? ' active' : ''}`, character?.name || dialogue.character || `对白 ${index + 1}`); button.type = 'button';
+    button.addEventListener('click', () => { selectedItemDialogueId = dialogue.id; refresh(); focusSelected(); });
+  });
+  const addDialogue = addChild(navigation, 'button', 'item-dialogue-inspector-add', '＋'); addDialogue.type = 'button'; addDialogue.title = '添加角色对白';
+  addDialogue.addEventListener('click', () => { const dialogue = createEmptyItemDialogue(); itemBlock.dialogues.push(dialogue); selectedItemDialogueId = dialogue.id; syncItemDialogueDataset(itemBlock); refresh(); markDirty(); focusSelected(); });
+  const dialogue = itemBlock.dialogues.find((entry) => entry.id === selectedItemDialogueId) || null;
+  if (!dialogue) { addChild(section, 'div', 'inspector-empty compact', '添加一条角色对白后，可设置角色、状态、语音、头像、立绘和文字格式。'); return null; }
+  const characters = desktopState.data.characters || [];
+  const characterGroup = addChild(section, 'div', 'property-group'); addChild(characterGroup, 'label', '', '当前角色');
+  const characterSelect = addChild(characterGroup, 'select', 'select-control editor-select');
+  const noCharacter = addChild(characterSelect, 'option', '', '未设置角色'); noCharacter.value = ''; noCharacter.selected = !dialogue.characterId && !dialogue.character;
+  characters.forEach((character) => { const option = addChild(characterSelect, 'option', '', character.name); option.value = character.id; option.selected = character.id === dialogue.characterId || (!dialogue.characterId && character.name === dialogue.character); });
+  characterSelect.addEventListener('change', () => {
+    const character = characters.find((item) => item.id === characterSelect.value);
+    if (character) applyCharacterToBlock(character, dialogue);
+    else { dialogue.character = ''; dialogue.characterId = ''; dialogue.characterColor = '#b8bcb8'; dialogue.portraitPreset = null; dialogue.avatar = undefined; dialogue.portrait = undefined; }
+    syncItemDialogueDataset(itemBlock); refresh(); markDirty();
+  });
+  const statusGroup = addChild(section, 'div', 'property-group'); addChild(statusGroup, 'label', '', '状态标签');
+  const statusEditor = addChild(statusGroup, 'div', 'status-tag-editor');
+  if (!(dialogue.statusTags || []).includes('关键节点')) {
+    const enableCritical = addChild(statusEditor, 'button', 'status-tag-chip critical-node-placeholder', '关键节点'); enableCritical.type = 'button'; enableCritical.title = '点击将当前对白设置为关键节点';
+    enableCritical.addEventListener('click', () => { dialogue.statusTags ||= []; dialogue.statusTags.unshift('关键节点'); syncItemDialogueDataset(itemBlock); refresh(); markDirty(); showToast('当前对白已设为关键节点'); });
+  }
+  orderedStatusTags(dialogue.statusTags).forEach((statusTag) => {
+    const chip = addChild(statusEditor, 'span', `status-tag-chip${statusTag === '关键节点' ? ' critical-node-tag' : ''}`); addChild(chip, 'span', '', statusTag);
+    const remove = addChild(chip, 'button', '', '×'); remove.type = 'button'; remove.title = '删除标签';
+    remove.addEventListener('click', () => { dialogue.statusTags = (dialogue.statusTags || []).filter((tag) => tag !== statusTag); syncItemDialogueDataset(itemBlock); refresh(); markDirty(); });
+  });
+  const statusInput = addChild(statusEditor, 'input', 'status-tag-input'); statusInput.placeholder = '输入后按回车';
+  const commitStatusTag = () => { const value = statusInput.value.trim(); if (!value || (dialogue.statusTags || []).includes(value)) return; dialogue.statusTags ||= []; if (value === '关键节点') dialogue.statusTags.unshift(value); else dialogue.statusTags.push(value); syncItemDialogueDataset(itemBlock); refresh(); markDirty(); };
+  statusInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); commitStatusTag(); } });
+  statusInput.addEventListener('blur', () => setTimeout(commitStatusTag, 0));
+  const voiceGroup = addChild(section, 'div', 'property-group'); addChild(voiceGroup, 'label', '', '语音提示');
+  const voiceSelect = addChild(voiceGroup, 'select', 'select-control editor-select');
+  ['女声 · 轻', '女声 · 强', '男声 · 低', '男声 · 清晰', '无语音'].forEach((voice) => { const option = addChild(voiceSelect, 'option', '', voice); option.value = voice; option.selected = dialogue.voice === voice; });
+  voiceSelect.addEventListener('change', () => { dialogue.voice = voiceSelect.value; syncItemDialogueDataset(itemBlock); refresh(); markDirty(); });
+  const selectedCharacter = characters.find((item) => item.id === dialogue.characterId || item.name === dialogue.character);
+  const avatarGroup = addChild(section, 'div', 'property-group'); addChild(avatarGroup, 'label', '', '当前头像表情');
+  createCharacterMediaSearchPicker(avatarGroup, characterMediaGroup(selectedCharacter, 'avatarGroup'), dialogue.avatar, (relativePath) => { dialogue.avatar = relativePath || undefined; syncItemDialogueDataset(itemBlock); refresh(); markDirty(); });
+  const portraitGroup = addChild(section, 'div', 'property-group'); addChild(portraitGroup, 'label', '', '当前立绘表情');
+  const portraitSelect = addChild(portraitGroup, 'select', 'select-control editor-select');
+  const none = addChild(portraitSelect, 'option', '', '不使用立绘'); none.value = 'none'; none.selected = !dialogue.portrait && !dialogue.portraitPreset;
+  characterMediaGroup(selectedCharacter, 'portraitGroup').forEach((portrait) => { const option = addChild(portraitSelect, 'option', '', portrait.name); option.value = `asset:${portrait.relativePath}`; option.selected = dialogue.portrait === portrait.relativePath; });
+  if (selectedCharacter?.portraitPreset) { const option = addChild(portraitSelect, 'option', '', '角色默认立绘'); option.value = `preset:${selectedCharacter.portraitPreset}`; option.selected = !dialogue.portrait && dialogue.portraitPreset === selectedCharacter.portraitPreset; }
+  portraitSelect.addEventListener('change', () => { if (portraitSelect.value.startsWith('asset:')) { dialogue.portrait = portraitSelect.value.slice(6); dialogue.portraitPreset = null; } else if (portraitSelect.value.startsWith('preset:')) { dialogue.portrait = undefined; dialogue.portraitPreset = portraitSelect.value.slice(7); } else { dialogue.portrait = undefined; dialogue.portraitPreset = null; } syncItemDialogueDataset(itemBlock); refresh(); markDirty(); });
+  const noteGroup = addChild(section, 'div', 'property-group'); addChild(noteGroup, 'label', '', '创作备注');
+  const note = addChild(noteGroup, 'textarea', ''); note.value = dialogue.note || ''; note.placeholder = '只供创作者查看的对白提示…';
+  note.addEventListener('input', () => {
+    dialogue.note = note.value; syncItemDialogueDataset(itemBlock);
+    const copy = document.querySelector(`.item-dialogue-detail-card[data-dialogue-id="${dialogue.id}"] .block-content, .item-dialogue-entry[data-dialogue-id="${dialogue.id}"] .item-dialogue-copy`); let display = copy?.querySelector('.item-dialogue-note, .block-note');
+    if (!note.value.trim()) display?.remove(); else { if (!display && copy) display = addChild(copy, 'div', copy.closest('.item-dialogue-detail-card') ? 'block-note' : 'item-dialogue-note'); if (display) display.textContent = `创作备注：${note.value}`; }
+    markDirty();
+  });
+  const removeDialogue = addChild(section, 'button', 'file-button danger item-dialogue-inspector-remove', '删除当前角色对白'); removeDialogue.type = 'button';
+  removeDialogue.addEventListener('click', async () => { if (!(await requestDeleteConfirmation('确定删除当前物品角色对白吗？'))) return; itemBlock.dialogues = itemBlock.dialogues.filter((entry) => entry.id !== dialogue.id); selectedItemDialogueId = itemBlock.dialogues[0]?.id || ''; syncItemDialogueDataset(itemBlock); refresh(); markDirty(); });
+  return dialogue;
+}
+function itemDialogueEditorScene() {
+  if (!itemDialogueEditorState) return null;
+  return desktopState.data?.chapters?.[itemDialogueEditorState.chapterIndex]?.scenes?.[itemDialogueEditorState.sceneIndex] || null;
+}
+function itemDialogueEditorBlock() {
+  return itemDialogueEditorScene()?.blocks?.find((block) => block.id === itemDialogueEditorState?.blockId && block.type === 'item') || null;
+}
+function syncItemInstanceSummary(itemBlock) {
+  syncItemDialogueDataset(itemBlock);
+  const wrapper = document.querySelector(`.script-block.item-block[data-block-id="${itemBlock.id}"]`);
+  const investigation = wrapper?.querySelector('.script-item-investigation-text');
+  if (investigation) {
+    investigation.textContent = itemBlock.investigation?.text || '尚未填写调查反应';
+    investigation.classList.toggle('empty', !itemBlock.investigation?.text?.trim());
+  }
+}
+function createItemDialogueDetailCard(dialogue, index, itemBlock) {
+  const card = createBlockElement(dialogue, index);
+  card.classList.add('item-dialogue-detail-card');
+  card.classList.toggle('selected', dialogue.id === selectedItemDialogueId);
+  card.dataset.dialogueId = dialogue.id;
+  card.dataset.blockIndex = String(index);
+  card.classList.remove('pov-dialogue');
+  const scene = itemDialogueEditorScene();
+  const itemBlockIndex = scene?.blocks?.findIndex((block) => block.id === itemBlock.id) ?? -1;
+  const perspectiveCharacterId = itemBlockIndex >= 0 ? perspectiveCharacterIdAt(itemBlockIndex) : '';
+  if (perspectiveCharacterId && perspectiveCharacterId === dialogue.characterId) card.classList.add('pov-dialogue');
+  const paragraph = card.querySelector('.block-content p');
+  if (paragraph) {
+    paragraph.dataset.placeholder = '输入角色对白…';
+    paragraph.addEventListener('input', () => {
+      dialogue.text = richTextPlainText(paragraph);
+      dialogue.textHtml = sanitizeRichTextHtml(paragraph.innerHTML);
+      syncItemInstanceSummary(itemBlock);
+      markDirty();
+    });
+  }
+  const action = card.querySelector('[data-block-action="delete"]');
+  if (action) {
+    delete action.dataset.blockAction;
+    action.title = '删除角色对白';
+    action.addEventListener('click', async (event) => {
+      event.preventDefault(); event.stopPropagation();
+      if (!(await requestDeleteConfirmation('确定删除这条物品角色对白吗？'))) return;
+      itemBlock.dialogues.splice(index, 1);
+      selectedItemDialogueId = itemBlock.dialogues[Math.min(index, itemBlock.dialogues.length - 1)]?.id || '';
+      syncItemInstanceSummary(itemBlock);
+      renderScene(); renderItemDialogueEditor(); markDirty();
+    });
+  }
+  card.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (selectedItemDialogueId === dialogue.id) return;
+    selectedItemDialogueId = dialogue.id;
+    document.querySelectorAll('.item-dialogue-detail-card').forEach((entry) => entry.classList.toggle('selected', entry === card));
+    positionItemDialogueAddActions();
+    renderItemDialogueEditorInspector();
+  });
+  const handle = card.querySelector('.block-handle');
+  if (handle) {
+    handle.draggable = true;
+    handle.addEventListener('dragstart', (event) => {
+      event.stopPropagation();
+      itemDialogueEditorState.draggedIndex = index;
+      card.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', dialogue.id);
+    });
+  }
+  card.addEventListener('dragover', (event) => {
+    if (itemDialogueEditorState?.draggedIndex === null || itemDialogueEditorState?.draggedIndex === undefined) return;
+    event.preventDefault(); event.stopPropagation();
+    document.querySelectorAll('.item-dialogue-detail-card').forEach((entry) => entry.classList.remove('drag-over'));
+    if (itemDialogueEditorState.draggedIndex !== index) card.classList.add('drag-over');
+  });
+  card.addEventListener('drop', (event) => {
+    event.preventDefault(); event.stopPropagation();
+    const sourceIndex = itemDialogueEditorState?.draggedIndex;
+    if (!Number.isInteger(sourceIndex) || sourceIndex === index) return;
+    const [moved] = itemBlock.dialogues.splice(sourceIndex, 1);
+    itemBlock.dialogues.splice(index, 0, moved);
+    itemDialogueEditorState.draggedIndex = null;
+    selectedItemDialogueId = moved.id;
+    syncItemInstanceSummary(itemBlock);
+    renderScene(); renderItemDialogueEditor(); markDirty();
+    showToast('物品角色对白顺序已调整');
+  });
+  card.addEventListener('dragend', (event) => {
+    event.stopPropagation();
+    if (itemDialogueEditorState) itemDialogueEditorState.draggedIndex = null;
+    document.querySelectorAll('.item-dialogue-detail-card').forEach((entry) => entry.classList.remove('drag-over', 'dragging'));
+  });
+  return card;
+}
+function positionItemDialogueAddActions() {
+  const list = document.getElementById('itemDialogueDetailList');
+  const actions = document.getElementById('itemDialogueDetailAdd');
+  if (!list || !actions) return;
+  const selected = list.querySelector(`.item-dialogue-detail-card[data-dialogue-id="${selectedItemDialogueId}"]`);
+  if (selected) selected.insertAdjacentElement('afterend', actions);
+  else list.appendChild(actions);
+}
+function renderItemDialogueEditorInspector() {
+  const body = document.getElementById('itemDialogueDetailInspector');
+  const itemBlock = itemDialogueEditorBlock();
+  if (!body || !itemBlock) return;
+  body.replaceChildren();
+  const refresh = () => {
+    syncItemInstanceSummary(itemBlock);
+    renderScene();
+    renderItemDialogueEditor();
+  };
+  const dialogue = renderItemDialogueSettings(body, itemBlock, {
+    refresh,
+    focusSelected: () => requestAnimationFrame(() => selectedDialogueParagraph()?.focus())
+  });
+  renderTextFormattingSettings(body, dialogue, { sectionKey: '' });
+}
+function renderItemDialogueEditor() {
+  const editor = document.getElementById('itemDialogueEditor');
+  const itemBlock = itemDialogueEditorBlock();
+  const scene = itemDialogueEditorScene();
+  if (!editor || !itemBlock || !scene) { closeItemDialogueEditor(); return; }
+  itemBlock.investigation ||= { text: '' };
+  itemBlock.dialogues ||= [];
+  if (!itemBlock.dialogues.some((dialogue) => dialogue.id === selectedItemDialogueId)) selectedItemDialogueId = itemBlock.dialogues[0]?.id || '';
+  const item = (desktopState.data.items || []).find((entry) => entry.id === itemBlock.itemId);
+  document.getElementById('itemDialogueEditorTitle').textContent = item?.name || '物品已失效';
+  document.getElementById('itemDialogueEditorContext').textContent = `${desktopState.data.chapters[itemDialogueEditorState.chapterIndex]?.title || '未命名章节'} / ${scene.title}`;
+  document.getElementById('itemDialogueEditorCount').textContent = `${itemBlock.dialogues.length} 条对白`;
+  const investigation = document.getElementById('itemInvestigationDetailInput');
+  investigation.value = itemBlock.investigation.text || '';
+  investigation.oninput = () => {
+    itemBlock.investigation.text = investigation.value;
+    syncItemInstanceSummary(itemBlock);
+    markDirty();
+  };
+  const list = document.getElementById('itemDialogueDetailList');
+  const addActions = document.getElementById('itemDialogueDetailAdd');
+  if (addActions?.parentElement === list) list.parentElement.appendChild(addActions);
+  list.replaceChildren();
+  if (!itemBlock.dialogues.length) {
+    const empty = addChild(list, 'div', 'item-dialogue-detail-empty');
+    addChild(empty, 'b', '', '还没有角色对白');
+    addChild(empty, 'span', '', '选择角色后添加第一条对白，或保持“未设置角色”创建空对白。');
+  }
+  itemBlock.dialogues.forEach((dialogue, index) => list.appendChild(createItemDialogueDetailCard(dialogue, index, itemBlock)));
+  const characterSelect = document.getElementById('itemDialogueNewCharacter');
+  characterSelect.replaceChildren();
+  const noCharacter = addChild(characterSelect, 'option', '', '不设置角色'); noCharacter.value = '';
+  (desktopState.data.characters || []).forEach((character) => { const option = addChild(characterSelect, 'option', '', character.name); option.value = character.id; });
+  characterSelect.value = itemDialogueEditorState.newCharacterId || '';
+  characterSelect.onchange = () => { itemDialogueEditorState.newCharacterId = characterSelect.value; };
+  const addDialogue = document.getElementById('addItemDialogueDetail');
+  addDialogue.onclick = () => {
+    const dialogue = itemFormatTools.normalizeItemDialogue({ id: createContentId('item-dialogue') });
+    const character = (desktopState.data.characters || []).find((entry) => entry.id === characterSelect.value);
+    if (character) applyCharacterToBlock(character, dialogue);
+    const selectedIndex = itemBlock.dialogues.findIndex((entry) => entry.id === selectedItemDialogueId);
+    const insertionIndex = selectedIndex >= 0 ? selectedIndex + 1 : itemBlock.dialogues.length;
+    itemBlock.dialogues.splice(insertionIndex, 0, dialogue);
+    selectedItemDialogueId = dialogue.id;
+    syncItemInstanceSummary(itemBlock);
+    renderScene(); renderItemDialogueEditor(); markDirty();
+    requestAnimationFrame(() => selectedDialogueParagraph()?.focus());
+  };
+  positionItemDialogueAddActions();
+  renderItemDialogueEditorInspector();
+}
+function openItemDialogueEditor(blockId) {
+  syncCurrentScene();
+  const block = currentScene()?.blocks?.find((entry) => entry.id === blockId && entry.type === 'item');
+  if (!block) { showToast('物品实例已失效'); return; }
+  itemDialogueEditorState = { chapterIndex: activeChapterIndex, sceneIndex: activeSceneIndex, blockId, newCharacterId: '', draggedIndex: null };
+  selectedItemDialogueId = block.dialogues?.[0]?.id || '';
+  const editor = document.getElementById('itemDialogueEditor');
+  editor.classList.remove('hidden'); editor.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('item-dialogue-editor-open');
+  renderItemDialogueEditor();
+  requestAnimationFrame(() => document.getElementById('itemInvestigationDetailInput')?.focus());
+}
+function closeItemDialogueEditor() {
+  const state = itemDialogueEditorState;
+  const blockId = state?.blockId;
+  itemDialogueEditorState = null;
+  selectedItemDialogueId = '';
+  const editor = document.getElementById('itemDialogueEditor');
+  editor?.classList.add('hidden'); editor?.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('item-dialogue-editor-open');
+  if (desktopState.data) { renderScene(); renderInspector(); }
+  if (blockId) requestAnimationFrame(() => document.querySelector(`.script-block.item-block[data-block-id="${blockId}"]`)?.focus?.());
+}
+document.getElementById('closeItemDialogueEditor')?.addEventListener('click', closeItemDialogueEditor);
+document.getElementById('itemDialogueEditor')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeItemDialogueEditor(); return; }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopPropagation(); saveProject(); return; }
+  event.stopPropagation();
+});
 function renderInspector() {
   const body = document.querySelector('.inspector-body'); if (!body) return; body.replaceChildren();
   document.getElementById('floatingInspectorLayer')?.replaceChildren();
@@ -2766,6 +3377,36 @@ function renderInspector() {
     (desktopState.data.characters || []).forEach((character) => { const option = addChild(perspectiveSelect, 'option', '', character.name); option.value = character.id; option.selected = selectedBlock.perspectiveCharacterId === character.id; });
     perspectiveSelect.addEventListener('change', () => { selectedBlock.perspectiveCharacterId = perspectiveSelect.value || null; renderScene(); markDirty(); });
     renderSegmentImageSettings(properties, selectedBlock);
+  } else if (selectedBlock?.type === 'item') {
+    if (header) header.textContent = '物品设置';
+    const properties = createInspectorSection(body, '当前物品', '', 'properties');
+    const items = desktopState.data.items || [];
+    const itemGroup = addChild(properties, 'div', 'property-group'); addChild(itemGroup, 'label', '', '引用物品');
+    const itemSelect = addChild(itemGroup, 'select', 'select-control editor-select');
+    if (!items.length) { const option = addChild(itemSelect, 'option', '', '物品库为空'); option.value = ''; itemSelect.disabled = true; }
+    items.forEach((item) => { const option = addChild(itemSelect, 'option', '', item.name); option.value = item.id; option.selected = item.id === selectedBlock.itemId; });
+    itemSelect.addEventListener('change', () => { selectedBlock.itemId = itemSelect.value; renderScene(); renderInspector(); markDirty(); });
+    const currentItem = items.find((item) => item.id === selectedBlock.itemId);
+    if (currentItem) {
+      const reference = addChild(properties, 'div', 'item-inspector-reference');
+      addChild(reference, 'b', '', currentItem.name);
+      addChild(reference, 'span', '', currentItem.summary || currentItem.effect || '尚未填写物品说明');
+      const openItem = addChild(reference, 'button', 'file-button', '打开物品资料'); openItem.type = 'button'; openItem.addEventListener('click', () => { document.querySelector('[data-view="items"]')?.click(); requestAnimationFrame(() => document.querySelector(`[data-item-id="${currentItem.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })); });
+    }
+    const investigationSection = createInspectorSection(body, '调查反应', '玩家调查该物品后显示的独立文案。');
+    selectedBlock.investigation ||= { text: '' };
+    const investigationText = addChild(investigationSection, 'textarea', 'item-investigation-editor'); investigationText.rows = 4; investigationText.value = selectedBlock.investigation.text || ''; investigationText.placeholder = '例如：翻过怀表后，表盖内侧露出一道新鲜划痕。';
+    investigationText.addEventListener('input', () => {
+      selectedBlock.investigation.text = investigationText.value;
+      const display = document.querySelector(`.script-block[data-block-id="${selectedBlock.id}"] .script-item-investigation-text`);
+      if (display) { display.textContent = investigationText.value || '尚未填写调查反应'; display.classList.toggle('empty', !investigationText.value.trim()); }
+      markDirty();
+    });
+    const dialogueOverview = createInspectorSection(body, '角色对白', '物品卡仅展示摘要；进入专用界面后可像普通剧本对白一样编辑。');
+    const overview = addChild(dialogueOverview, 'div', 'item-dialogue-inspector-overview');
+    addChild(overview, 'b', '', `${selectedBlock.dialogues?.length || 0} 条角色对白`);
+    addChild(overview, 'span', '', selectedBlock.dialogues?.length ? '支持角色、头像、立绘、状态标签、语音、富文本和创作备注。' : '尚未添加角色对白。');
+    const openDialogueEditor = addChild(dialogueOverview, 'button', 'primary-button', '编辑角色对白'); openDialogueEditor.type = 'button'; openDialogueEditor.addEventListener('click', () => openItemDialogueEditor(selectedBlock.id));
   } else if (selectedBlock?.type === 'narration') {
     if (header) header.textContent = '旁白';
     const properties = createInspectorSection(body, '当前旁白', '', 'properties');
@@ -2810,7 +3451,7 @@ function renderInspector() {
       const noteGroup = addChild(properties, 'div', 'property-group'); addChild(noteGroup, 'label', '', '创作备注'); const note = addChild(noteGroup, 'textarea', '', dialogueBlock.note || ''); note.placeholder = '给自己留下一句创作提示…'; note.addEventListener('input', () => { dialogueBlock.note = note.value; syncDialogueNoteDisplay(noteBlockIndex, note.value); markDirty(); });
     }
   }
-  if (selectedBlock?.type !== 'narration' && selectedBlock?.type !== 'choice') renderTextFormattingSettings(body, dialogueBlock);
+  if (selectedBlock?.type === 'dialogue') renderTextFormattingSettings(body, dialogueBlock);
   requestAnimationFrame(() => clampFloatingInspectorSections());
 }
 function applyCharacterToBlock(character, block) {
@@ -3198,7 +3839,10 @@ function renderCharacters() {
       const updated = await requestCharacterForm(character);
       if (!updated) return;
       desktopState.data.characters[characterIndex] = { ...character, ...updated };
-      desktopState.data.chapters.forEach((chapter) => chapter.scenes.forEach((scene) => scene.blocks.forEach((block) => { if (block.type === 'dialogue' && (block.characterId === character.id || block.character === character.name)) applyCharacterToBlock(desktopState.data.characters[characterIndex], block); })));
+      desktopState.data.chapters.forEach((chapter) => chapter.scenes.forEach((scene) => scene.blocks.forEach((block) => {
+        if (block.type === 'dialogue' && (block.characterId === character.id || block.character === character.name)) applyCharacterToBlock(desktopState.data.characters[characterIndex], block);
+        if (block.type === 'item') (block.dialogues || []).forEach((dialogue) => { if (dialogue.characterId === character.id || dialogue.character === character.name) applyCharacterToBlock(desktopState.data.characters[characterIndex], dialogue); });
+      })));
       renderCharacters(); syncDialogueCreationState(); renderScene(); renderInspector(); markDirty();
     });
     use.addEventListener('click', () => {
@@ -3379,7 +4023,7 @@ function renderSegmentNavigator() {
   });
 }
 const baseRenderScene = renderScene;
-renderScene = function () { baseRenderScene(); savedTextRange = null; savedTextBlockIndex = null; document.querySelectorAll('.block-handle').forEach((handle) => { handle.draggable = true; }); renderInspector(); renderSegmentNavigator(); };
+renderScene = function () { baseRenderScene(); savedTextRange = null; savedTextBlockIndex = null; savedTextDialogueId = ''; document.querySelectorAll('.block-handle').forEach((handle) => { handle.draggable = true; }); renderInspector(); renderSegmentNavigator(); };
 const baseRenderImportedAssets = renderImportedAssets;
 renderImportedAssets = function () { baseRenderImportedAssets(); };
 document.getElementById('workspaceSwitcher')?.addEventListener('click', openProjectMenu);

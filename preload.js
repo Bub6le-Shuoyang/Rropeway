@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('scriptroom', {
   importAssets: (projectPath) => ipcRenderer.invoke('asset:import', { projectPath }),
   importImages: (projectPath) => ipcRenderer.invoke('asset:import-images', { projectPath }),
   importCharacterMedia: (projectPath, characterId, group) => ipcRenderer.invoke('character:import-media', { projectPath, characterId, group }),
+  importItemImages: (projectPath, itemId) => ipcRenderer.invoke('item:import-images', { projectPath, itemId }),
+  deleteItemStorage: (projectPath, itemId) => ipcRenderer.invoke('item:delete-storage', { projectPath, itemId }),
   saveCroppedAvatar: (projectPath, characterId, payload) => ipcRenderer.invoke('character:save-cropped-avatar', { projectPath, characterId, ...payload }),
   deleteAsset: (projectPath, relativePath) => ipcRenderer.invoke('asset:delete', { projectPath, relativePath }),
   readAsset: (projectPath, relativePath) => ipcRenderer.invoke('asset:read', { projectPath, relativePath }),

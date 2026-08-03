@@ -127,6 +127,29 @@ async function importCharacterMediaFiles(projectPath, characterId, group) {
   }
   return imported;
 }
+async function importItemImageFiles(projectPath, itemId) {
+  if (!projectPath) throw new Error('请先保存项目，再导入物品图片');
+  const safeItemId = String(itemId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!safeItemId) throw new Error('物品标识无效');
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '导入物品图片组',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }]
+  });
+  if (result.canceled) return [];
+  const imageDirectory = path.join(path.dirname(projectPath), 'assets', 'items', safeItemId, 'images');
+  await fs.mkdir(imageDirectory, { recursive: true });
+  const imported = [];
+  for (const source of result.filePaths) {
+    const extension = path.extname(source).slice(1).toLowerCase();
+    const safeName = `${crypto.randomUUID()}-${path.basename(source).replace(/[^\w.\-\u4e00-\u9fff]/g, '_')}`;
+    await fs.copyFile(source, path.join(imageDirectory, safeName));
+    const relativePath = path.join('assets', 'items', safeItemId, 'images', safeName).replaceAll('\\', '/');
+    const originalName = path.basename(source, path.extname(source));
+    imported.push({ id: crypto.randomUUID(), name: originalName, originalName, relativePath, type: extension });
+  }
+  return imported;
+}
 async function saveCroppedCharacterAvatar(projectPath, characterId, payload) {
   if (!projectPath) throw new Error('请先保存项目，再生成头像');
   const safeCharacterId = String(characterId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -252,6 +275,14 @@ ipcMain.handle('asset:import', async (_event, { projectPath }) => {
 });
 ipcMain.handle('asset:import-images', async (_event, { projectPath }) => importAssetFiles(projectPath, true));
 ipcMain.handle('character:import-media', async (_event, { projectPath, characterId, group }) => importCharacterMediaFiles(projectPath, characterId, group));
+ipcMain.handle('item:import-images', async (_event, { projectPath, itemId }) => importItemImageFiles(projectPath, itemId));
+ipcMain.handle('item:delete-storage', async (_event, { projectPath, itemId }) => {
+  if (!projectPath) return true;
+  const safeItemId = String(itemId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!safeItemId) throw new Error('物品标识无效');
+  await trashIfExists(path.join(path.dirname(projectPath), 'assets', 'items', safeItemId));
+  return true;
+});
 ipcMain.handle('character:save-cropped-avatar', async (_event, payload) => saveCroppedCharacterAvatar(payload?.projectPath, payload?.characterId, payload));
 ipcMain.handle('asset:delete', async (_event, { projectPath, relativePath }) => {
   const normalizedPath = String(relativePath || '').replaceAll('\\', '/');
