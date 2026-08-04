@@ -54,6 +54,15 @@
           <section class="script-panel" id="editorView">
             <div class="script-panel-scroll">
             <div class="section-title script-heading"><div><div class="eyebrow">SCRIPT EDITOR</div><h2 id="sceneTitle">未命名场景</h2><p class="muted" id="sceneSummary">空白场景</p></div><div class="heading-actions"><button class="primary-button" id="previewBtn">▶ 预览</button></div></div>
+            <section class="branch-trigger-panel hidden" id="branchTriggerPanel" aria-label="支线设置">
+              <div class="branch-trigger-copy">
+                <span class="branch-trigger-badge">支线</span>
+                <label for="branchTriggerInput">触发方式</label>
+                <span class="branch-flow-status" id="branchFlowStatus">默认不参与流程图</span>
+              </div>
+              <textarea id="branchTriggerInput" rows="2" maxlength="500" placeholder="记录玩家如何触发这条支线，例如：调查旧书架并持有黄铜钥匙"></textarea>
+              <button class="branch-flow-toggle" id="branchFlowToggle" type="button">加入流程图</button>
+            </section>
             <div class="scene-tabs"></div>
             <div class="script-canvas">
               <div class="canvas-toolbar"><span>对白流</span><div class="toolbar-spacer"></div><button class="toolbar-icon" title="撤销">↶</button><button class="toolbar-icon" title="重做">↷</button></div>

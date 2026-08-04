@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { defaultSceneTransitions, flattenProjectScenes, nextSequentialSceneLocation, normalizeSceneFlow } = require('../story-flow');
+const { defaultSceneTransitions, flattenFlowScenes, flattenProjectBranches, flattenProjectScenes, nextSequentialSceneLocation, normalizeSceneFlow } = require('../story-flow');
 
 const chapters = [
   { id: 'chapter-a', title: '第一章', scenes: [{ id: 'scene-a', title: '起点' }, { id: 'scene-b', title: '岔路' }] },
@@ -44,4 +44,62 @@ test('章节预览只在当前章节内顺序切换场景', () => {
   assert.deepEqual(nextSequentialSceneLocation(chapters, 0, 0, true), { chapterIndex: 0, sceneIndex: 1 });
   assert.equal(nextSequentialSceneLocation(chapters, 0, 1, true), null);
   assert.deepEqual(nextSequentialSceneLocation(chapters, 0, 1, false), { chapterIndex: 1, sceneIndex: 0 });
+});
+
+test('支线默认不进入流程图，手动加入后才参与流程', () => {
+  const projectChapters = [{
+    id: 'chapter-a',
+    scenes: [
+      { id: 'scene-a', title: '主线起点' },
+      { id: 'branch-a', title: '隐藏房间', kind: 'branch', includeInFlow: false },
+      { id: 'scene-b', title: '主线终点' },
+      { id: 'branch-b', title: '已加入支线', kind: 'branch', includeInFlow: true }
+    ]
+  }];
+  assert.deepEqual(flattenProjectScenes(projectChapters).map((item) => item.id), ['scene-a', 'branch-a', 'scene-b', 'branch-b']);
+  assert.deepEqual(flattenFlowScenes(projectChapters).map((item) => item.id), ['scene-a', 'scene-b', 'branch-b']);
+  assert.deepEqual(defaultSceneTransitions(projectChapters), [
+    { sourceSceneId: 'scene-a', targetSceneId: 'scene-b' },
+    { sourceSceneId: 'scene-b', targetSceneId: 'branch-b' }
+  ]);
+  const flow = normalizeSceneFlow({
+    transitions: [
+      { sourceSceneId: 'scene-a', targetSceneId: 'branch-a' },
+      { sourceSceneId: 'scene-a', targetSceneId: 'scene-b' },
+      { sourceSceneId: 'scene-b', targetSceneId: 'branch-b' }
+    ]
+  }, projectChapters);
+  assert.deepEqual(flow.transitions, [
+    { sourceSceneId: 'scene-a', targetSceneId: 'scene-b' },
+    { sourceSceneId: 'scene-b', targetSceneId: 'branch-b' }
+  ]);
+});
+
+test('普通章节预览跳过支线场景', () => {
+  const projectChapters = [{ scenes: [
+    { id: 'scene-a' },
+    { id: 'branch-a', kind: 'branch' },
+    { id: 'scene-b' }
+  ] }];
+  assert.deepEqual(nextSequentialSceneLocation(projectChapters, 0, 0, true), { chapterIndex: 0, sceneIndex: 2 });
+  assert.deepEqual(nextSequentialSceneLocation(projectChapters, 0, 0, true, true), { chapterIndex: 0, sceneIndex: 1 });
+});
+
+test('一条支线可包含多个独立场景并由支线分组统一控制流程参与状态', () => {
+  const projectChapters = [{
+    id: 'chapter-a',
+    title: '第一章',
+    branches: [{ id: 'branch-a', title: '密室支线', trigger: '获得钥匙', includeInFlow: false }],
+    scenes: [
+      { id: 'scene-a', title: '主线' },
+      { id: 'branch-a-1', title: '发现暗门', kind: 'branch', branchId: 'branch-a' },
+      { id: 'branch-a-2', title: '进入密室', kind: 'branch', branchId: 'branch-a' }
+    ]
+  }];
+  const [branch] = flattenProjectBranches(projectChapters);
+  assert.equal(branch.branch.title, '密室支线');
+  assert.deepEqual(branch.scenes.map((item) => item.id), ['branch-a-1', 'branch-a-2']);
+  assert.deepEqual(flattenFlowScenes(projectChapters).map((item) => item.id), ['scene-a']);
+  projectChapters[0].branches[0].includeInFlow = true;
+  assert.deepEqual(flattenFlowScenes(projectChapters).map((item) => item.id), ['scene-a', 'branch-a-1', 'branch-a-2']);
 });

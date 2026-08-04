@@ -146,6 +146,26 @@ test('项目会保存跨章节的场景预览流程', () => {
   assert.deepEqual(project.sceneFlow.transitions, [{ sourceSceneId: 'scene-c', targetSceneId: 'scene-a' }, { sourceSceneId: 'scene-a', targetSceneId: 'scene-b' }]);
 });
 
+test('支线会保存触发方式且默认排除在流程图之外', () => {
+  const project = normalizeProject({
+    chapters: [{ scenes: [
+      { id: 'scene-main', title: '主线' },
+      { id: 'scene-branch', title: '密室支线', kind: 'branch', branchTrigger: '调查书架后获得旧钥匙' },
+      { id: 'scene-branch-flow', title: '已编排支线', kind: 'branch', branchTrigger: '选择留下', includeInFlow: true }
+    ] }],
+    sceneFlow: { transitions: [{ sourceSceneId: 'scene-main', targetSceneId: 'scene-branch-flow' }] }
+  });
+  const [, branch, includedBranch] = project.chapters[0].scenes;
+  const [branchGroup, includedBranchGroup] = project.chapters[0].branches;
+  assert.equal(branch.kind, 'branch');
+  assert.equal(branch.branchId, branchGroup.id);
+  assert.equal(branchGroup.trigger, '调查书架后获得旧钥匙');
+  assert.equal(branchGroup.includeInFlow, false);
+  assert.equal(includedBranch.branchId, includedBranchGroup.id);
+  assert.equal(includedBranchGroup.includeInFlow, true);
+  assert.deepEqual(project.sceneFlow.transitions, [{ sourceSceneId: 'scene-main', targetSceneId: 'scene-branch-flow' }]);
+});
+
 test('项目会保存物品库以及每次插入的独立调查反应和角色对白', () => {
   const project = normalizeProject({
     items: [{ id: 'item-a', name: '旧怀表', tags: ['线索'], effect: '记录隐藏时间' }],

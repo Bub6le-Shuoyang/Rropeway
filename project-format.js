@@ -8,7 +8,8 @@ const DEFAULT_PROJECT = {
   description: '',
   chapters: [{
     id: 'chapter-1', title: '第一章', status: '草稿',
-    scenes: [{ id: 'scene-1', number: '01', title: '未命名场景', blocks: [] }]
+    scenes: [{ id: 'scene-1', number: '01', title: '未命名场景', blocks: [] }],
+    branches: []
   }],
   characters: [],
   relationshipGraph: { positions: {}, relationships: [], notes: [], viewport: { centerX: 0.5, centerY: 0.5, zoom: 1 } },
@@ -93,7 +94,61 @@ function normalizeCharacter(character, index) {
 }
 function normalizeScene(scene, index) {
   const value = scene && typeof scene === 'object' ? scene : {};
-  return { id: String(value.id || `scene-${Date.now()}-${index}`), number: String(value.number || String(index + 1).padStart(2, '0')), title: String(value.title || `未命名场景 ${index + 1}`), background: value.background ? String(value.background) : '', blocks: Array.isArray(value.blocks) ? value.blocks.map(normalizeBlock) : [] };
+  const kind = value.kind === 'branch' || value.isBranch === true ? 'branch' : 'scene';
+  return {
+    id: String(value.id || `scene-${Date.now()}-${index}`),
+    number: String(value.number || String(index + 1).padStart(2, '0')),
+    title: String(value.title || `未命名场景 ${index + 1}`),
+    kind,
+    branchId: kind === 'branch' ? String(value.branchId || value.branchGroupId || '') : '',
+    background: value.background ? String(value.background) : '',
+    blocks: Array.isArray(value.blocks) ? value.blocks.map(normalizeBlock) : []
+  };
+}
+function normalizeChapter(chapter, chapterIndex) {
+  const value = chapter && typeof chapter === 'object' ? chapter : {};
+  const rawScenes = Array.isArray(value.scenes) ? value.scenes : [];
+  const scenes = rawScenes.map(normalizeScene);
+  const rawBranches = Array.isArray(value.branches) ? value.branches : Array.isArray(value.branchGroups) ? value.branchGroups : [];
+  const branches = [];
+  const branchById = new Map();
+  rawBranches.forEach((branch, branchIndex) => {
+    const id = String(branch?.id || `branch-${Date.now()}-${chapterIndex}-${branchIndex}`);
+    if (branchById.has(id)) return;
+    const normalized = {
+      id,
+      title: String(branch?.title || `未命名支线 ${branchIndex + 1}`),
+      trigger: String(branch?.trigger || branch?.branchTrigger || ''),
+      includeInFlow: branch?.includeInFlow === true
+    };
+    branches.push(normalized);
+    branchById.set(id, normalized);
+  });
+  scenes.forEach((scene, sceneIndex) => {
+    if (scene.kind !== 'branch') return;
+    const rawScene = rawScenes[sceneIndex] || {};
+    const branchId = String(scene.branchId || `branch-${scene.id}`);
+    scene.branchId = branchId;
+    if (branchById.has(branchId)) return;
+    const normalized = {
+      id: branchId,
+      title: String(rawScene.branchTitle || rawScene.title || `未命名支线 ${branches.length + 1}`),
+      trigger: String(rawScene.branchTrigger || rawScene.trigger || ''),
+      includeInFlow: rawScene.includeInFlow === true
+    };
+    branches.push(normalized);
+    branchById.set(branchId, normalized);
+  });
+  const usedBranchIds = new Set(scenes.filter((scene) => scene.kind === 'branch').map((scene) => scene.branchId));
+  const normalizedBranches = branches.filter((branch) => usedBranchIds.has(branch.id));
+  if (!scenes.some((scene) => scene.kind !== 'branch')) scenes.unshift(normalizeScene({}, 0));
+  return {
+    id: String(value.id || `chapter-${Date.now()}-${chapterIndex}`),
+    title: String(value.title || `第 ${chapterIndex + 1} 章`),
+    status: String(value.status || '草稿'),
+    scenes,
+    branches: normalizedBranches
+  };
 }
 function normalizeRelationshipGraph(graph, characters) {
   const value = graph && typeof graph === 'object' ? graph : {};
@@ -135,15 +190,14 @@ function normalizeProject(input) {
   const characters = Array.isArray(value.characters) ? value.characters.map(normalizeCharacter) : [];
   const normalized = {
     format: 'scriptroom-project', version: 1, title: String(value.title || 'Rropeway'), description: String(value.description || ''),
-    chapters: chapters.map((chapter, chapterIndex) => ({ id: String(chapter?.id || `chapter-${Date.now()}-${chapterIndex}`), title: String(chapter?.title || `第 ${chapterIndex + 1} 章`), status: String(chapter?.status || '草稿'), scenes: Array.isArray(chapter?.scenes) ? chapter.scenes.map(normalizeScene) : [] })),
+    chapters: chapters.map(normalizeChapter),
     characters,
     relationshipGraph: normalizeRelationshipGraph(value.relationshipGraph, characters),
     items: Array.isArray(value.items) ? value.items.map(normalizeItem) : [],
     assets: Array.isArray(value.assets) ? value.assets.map((asset) => ({ id: String(asset?.id || `asset-${Date.now()}`), name: String(asset?.name || '未命名素材'), fileName: String(asset?.fileName || ''), relativePath: String(asset?.relativePath || asset?.fileName || ''), type: String(asset?.type || ''), tags: (Array.isArray(asset?.tags) ? asset.tags : asset?.tag ? [asset.tag] : []).map((tag) => String(tag).trim()).filter((tag, index, tags) => tag && tags.indexOf(tag) === index) })) : [],
     updatedAt: value.updatedAt || new Date().toISOString()
   };
-  if (!normalized.chapters.length) normalized.chapters.push({ id: `chapter-${Date.now()}`, title: '第一章', status: '草稿', scenes: [] });
-  normalized.chapters.forEach((chapter, chapterIndex) => { if (!chapter.scenes.length) chapter.scenes.push(normalizeScene({}, chapterIndex)); });
+  if (!normalized.chapters.length) normalized.chapters.push({ id: `chapter-${Date.now()}`, title: '第一章', status: '草稿', scenes: [normalizeScene({}, 0)], branches: [] });
   normalized.sceneFlow = normalizeSceneFlow(value.sceneFlow, normalized.chapters);
   return normalized;
 }

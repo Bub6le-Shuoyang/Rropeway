@@ -144,6 +144,7 @@ async function loadSplitProject(projectPath, manifest) {
       title: chapterDocument.title,
       status: chapterDocument.status,
       scenes,
+      branches: Array.isArray(chapterDocument.branches) ? chapterDocument.branches : [],
     };
   }));
 
@@ -278,6 +279,7 @@ async function writeRevision(stagingPath, rootRelativePath, revision, project) {
       title: chapter.title,
       status: chapter.status,
       scenes: sceneReferences,
+      branches: Array.isArray(chapter.branches) ? chapter.branches : [],
     }));
   }
 

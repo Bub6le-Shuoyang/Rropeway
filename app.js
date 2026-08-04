@@ -46,6 +46,7 @@ function clampRelationshipZoom(value) { return Math.round(Math.min(MAX_RELATIONS
 let relationshipZoom = clampRelationshipZoom(localStorage.getItem(RELATIONSHIP_ZOOM_STORAGE_KEY));
 const normalizedAvatarSourceCache = new Map();
 const expandedChapterIds = new Set();
+const expandedBranchIds = new Set();
 let draggedChapterId = null;
 let draggedSceneInfo = null;
 let ignoreTreeClickUntil = 0;
@@ -665,11 +666,21 @@ function updateSceneWordCount() {
   let total = 0;
   const characterIds = new Set();
   let dialogues = 0, choices = 0, narrations = 0;
-  document.querySelectorAll('.script-block').forEach((block) => {
+  document.querySelectorAll('.script-canvas > .script-block').forEach((block) => {
     if (block.classList.contains('dialogue')) {
       dialogues++;
       const cid = block.dataset.characterId;
       if (cid) characterIds.add(cid);
+    } else if (block.classList.contains('item-block')) {
+      let itemDialogues = [];
+      try { itemDialogues = JSON.parse(block.dataset.itemDialogues || '[]'); } catch {}
+      dialogues += itemDialogues.length;
+      itemDialogues.forEach((dialogue) => {
+        if (dialogue.characterId) characterIds.add(dialogue.characterId);
+        total += writingCheckTools.plainText(dialogue.textHtml || dialogue.text).length;
+      });
+      const investigation = block.querySelector('.script-item-investigation-text');
+      if (investigation && !investigation.classList.contains('empty')) total += investigation.textContent.trim().length;
     } else if (block.classList.contains('choice-block')) {
       choices += block.querySelectorAll('.choice-option-text').length;
     } else if (block.classList.contains('narration')) {
@@ -716,7 +727,11 @@ function sanitizeRichTextHtml(html) {
   [...source.content.childNodes].forEach((child) => copySafeNode(child, output));
   return output.innerHTML;
 }
-function syncCurrentScene() { const scene = currentScene(); if (scene) scene.blocks = captureBlocks(); }
+function syncCurrentScene() {
+  const scene = currentScene();
+  if (!scene || itemDialogueEditorState) return;
+  scene.blocks = captureBlocks();
+}
 function captureProject() { syncCurrentScene(); const data = desktopState.data; data.title = String(data.title || document.getElementById('workspaceTitle').textContent || 'Rropeway').trim(); data.chapters[0] && (data.chapters[0].title = data.chapters[0].title || '第一章'); return data; }
 function updateUndoAvailability() {
   const undoButton = document.getElementById('undoProjectBtn');
@@ -769,8 +784,8 @@ function redoProjectChange() {
 
 function perspectiveCharacterIdAt(index) {
   const blocks = currentScene()?.blocks || [];
-  for (let blockIndex = index - 1; blockIndex >= 0; blockIndex -= 1) {
-    if (blocks[blockIndex].type === 'segment') return blocks[blockIndex].perspectiveCharacterId || null;
+  for (let blockIndex = Math.min(index - 1, blocks.length - 1); blockIndex >= 0; blockIndex -= 1) {
+    if (blocks[blockIndex]?.type === 'segment') return blocks[blockIndex].perspectiveCharacterId || null;
   }
   return null;
 }
@@ -818,6 +833,8 @@ function navigateToProjectBlock(chapterIndex, sceneIndex, blockIndex = 0) {
   activeSceneIndex = sceneIndex;
   selectedBlockIndex = Math.max(0, blockIndex);
   expandedChapterIds.add(desktopState.data.chapters[chapterIndex].id);
+  const targetScene = desktopState.data.chapters[chapterIndex].scenes[sceneIndex];
+  if (targetScene.branchId) expandedBranchIds.add(targetScene.branchId);
   document.querySelector('[data-view="editor"]')?.click();
   renderChapters(); renderSceneTabs(); renderScene(); renderInspector();
   requestAnimationFrame(() => document.querySelector(`.script-block[data-block-index="${selectedBlockIndex}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
@@ -876,7 +893,7 @@ function createCriticalNodePicker(parent, option, criticalNodes, onChange) {
   updateTrigger();
   return picker;
 }
-function createBlockElement(block, index) {
+function createBlockElement(block, index, options = {}) {
   const blockClass = block.type === 'choice' ? 'choice-block' : block.type === 'segment' ? 'segment-block' : block.type === 'item' ? 'item-block' : block.type;
   const wrapper = node('div', `script-block ${blockClass}${index === selectedBlockIndex ? ' selected' : ''}`);
   wrapper.dataset.blockIndex = String(index);
@@ -1001,7 +1018,8 @@ function createBlockElement(block, index) {
     const character = (desktopState.data?.characters || []).find((item) => item.id === block.characterId || item.name === block.character);
     const hasCharacter = Boolean(character || String(block.character || '').trim());
     if (!Array.isArray(block.statusTags)) block.statusTags = [block.statusTag || block.emotion || ''].map((tag) => String(tag).trim()).filter(Boolean);
-    const isPerspective = perspectiveCharacterIdAt(index) && perspectiveCharacterIdAt(index) === (block.characterId || character?.id);
+    const perspectiveCharacterId = Object.hasOwn(options, 'perspectiveCharacterId') ? options.perspectiveCharacterId : perspectiveCharacterIdAt(index);
+    const isPerspective = Boolean(perspectiveCharacterId && perspectiveCharacterId === (block.characterId || character?.id));
     if (isPerspective) wrapper.classList.add('pov-dialogue');
     if (!hasCharacter) wrapper.classList.add('unassigned-dialogue');
     const meta = addChild(content, 'div', 'dialogue-meta');
@@ -1052,6 +1070,39 @@ function positionFlowAddActions() {
   else canvas.appendChild(actions);
 }
 
+function isBranchScene(scene) {
+  return storyFlowTools?.isBranchScene ? storyFlowTools.isBranchScene(scene) : scene?.kind === 'branch';
+}
+
+function branchGroupForScene(scene, chapter = currentChapter()) {
+  if (!isBranchScene(scene)) return null;
+  return (chapter?.branches || []).find((branch) => branch.id === scene.branchId) || null;
+}
+
+function branchScenes(chapter, branchId) {
+  return (chapter?.scenes || []).filter((scene) => isBranchScene(scene) && scene.branchId === branchId);
+}
+
+function renderBranchTriggerPanel(scene) {
+  const panel = document.getElementById('branchTriggerPanel');
+  const input = document.getElementById('branchTriggerInput');
+  const status = document.getElementById('branchFlowStatus');
+  const toggle = document.getElementById('branchFlowToggle');
+  if (!panel || !input || !status || !toggle) return;
+  const isBranch = isBranchScene(scene);
+  panel.classList.toggle('hidden', !isBranch);
+  if (!isBranch) return;
+  const branch = branchGroupForScene(scene);
+  const badge = panel.querySelector('.branch-trigger-badge');
+  if (badge) badge.textContent = branch?.title ? `支线 · ${branch.title}` : '支线';
+  input.value = branch?.trigger || '';
+  const included = branch?.includeInFlow === true;
+  status.textContent = included ? '已加入流程图' : '默认不参与流程图';
+  status.classList.toggle('included', included);
+  toggle.textContent = included ? '从流程图移出' : '加入流程图';
+  toggle.classList.toggle('included', included);
+}
+
 function renderScene() {
   clearSegmentSlideshows();
   const scene = currentScene(); if (!scene) return;
@@ -1061,17 +1112,19 @@ function renderScene() {
   (scene.blocks || []).forEach((block, index) => canvas.insertBefore(createBlockElement(block, index), addButton));
   positionFlowAddActions();
   document.getElementById('sceneTitle').textContent = scene.title;
-  document.getElementById('sceneSummary').textContent = scene.blocks?.length ? `${scene.blocks.length} 个内容块` : '空白场景';
+  document.getElementById('sceneSummary').textContent = scene.blocks?.length ? `${isBranchScene(scene) ? '支线 · ' : ''}${scene.blocks.length} 个内容块` : (isBranchScene(scene) ? '空白支线' : '空白场景');
+  renderBranchTriggerPanel(scene);
   const breadcrumbTitle = document.getElementById('breadcrumbSceneTitle');
   if (breadcrumbTitle) { breadcrumbTitle.classList.remove('editing'); breadcrumbTitle.textContent = `第 ${activeChapterIndex + 1} 章 · ${scene.title}`; }
 }
 function renderSceneTabs() {
-  const tabs = document.querySelector('.scene-tabs'); tabs.replaceChildren(); const scenes = currentChapter()?.scenes || [];
-  scenes.forEach((scene, index) => { const button = addChild(tabs, 'button', `scene-tab${index === activeSceneIndex ? ' active' : ''}`); button.append(document.createTextNode(`${scene.number} `)); addChild(button, 'span', '', scene.title); button.addEventListener('click', () => activateScene(index)); button.addEventListener('dblclick', () => renameScene(index)); });
-  const add = addChild(tabs, 'button', 'add-scene', '＋'); add.addEventListener('click', addScene);
+  const tabs = document.querySelector('.scene-tabs'); tabs.replaceChildren(); const chapter = currentChapter(); const activeScene = currentScene();
+  const sceneItems = (chapter?.scenes || []).map((scene, index) => ({ scene, index })).filter(({ scene }) => isBranchScene(activeScene) ? scene.branchId === activeScene.branchId : !isBranchScene(scene));
+  sceneItems.forEach(({ scene, index }) => { const branch = branchGroupForScene(scene, chapter); const button = addChild(tabs, 'button', `scene-tab${isBranchScene(scene) ? ' branch' : ''}${index === activeSceneIndex ? ' active' : ''}`); button.title = isBranchScene(scene) ? `${branch?.title || '支线'} · ${branch?.includeInFlow ? '已加入流程图' : '默认不参与流程图'}` : scene.title; button.append(document.createTextNode(`${scene.number} `)); addChild(button, 'span', '', scene.title); button.addEventListener('click', () => activateScene(index)); button.addEventListener('dblclick', () => renameScene(index)); });
+  const add = addChild(tabs, 'button', 'add-scene', '＋'); add.title = isBranchScene(activeScene) ? '添加支线场景' : '添加场景'; add.addEventListener('click', () => { if (isBranchScene(currentScene())) addBranchScene(activeChapterIndex, currentScene().branchId); else addScene(); });
 }
 function activateScene(index) { syncCurrentScene(); activeSceneIndex = index; selectedBlockIndex = 0; renderSceneTabs(); renderScene(); }
-async function renameScene(index) { const scene = currentChapter()?.scenes?.[index]; if (!scene) return; const title = await requestTextInput('场景名称', scene.title); if (title) { scene.title = title; renderSceneTabs(); renderScene(); markDirty(); } }
+async function renameScene(index) { const scene = currentChapter()?.scenes?.[index]; if (!scene) return; const title = await requestTextInput('场景名称', scene.title); if (title) { scene.title = title; renderChapters(); renderSceneTabs(); renderScene(); markDirty(); } }
 function resizeBreadcrumbSceneInput(input) {
   input.style.width = `${Math.max(96, Math.min(360, Array.from(input.value || '').length * 14 + 24))}px`;
 }
@@ -1125,8 +1178,88 @@ function beginBreadcrumbSceneRename() {
 const breadcrumbSceneTitle = document.getElementById('breadcrumbSceneTitle');
 breadcrumbSceneTitle?.addEventListener('click', beginBreadcrumbSceneRename);
 breadcrumbSceneTitle?.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); beginBreadcrumbSceneRename(); } });
-function addScene() { syncCurrentScene(); const chapter = currentChapter(); chapter.scenes.push({ id: `scene-${Date.now()}`, number: String(chapter.scenes.length + 1).padStart(2, '0'), title: `未命名场景 ${chapter.scenes.length + 1}`, blocks: [] }); activeSceneIndex = chapter.scenes.length - 1; selectedBlockIndex = 0; renderSceneTabs(); renderScene(); markDirty(); showToast('已添加新场景'); }
-function normalizeSceneNumbers(chapter) { chapter.scenes.forEach((scene, sceneIndex) => { scene.number = String(sceneIndex + 1).padStart(2, '0'); }); }
+function addScene() {
+  syncCurrentScene();
+  const chapter = currentChapter();
+  if (!chapter) return;
+  const sceneNumber = chapter.scenes.filter((scene) => !isBranchScene(scene)).length + 1;
+  const insertionIndex = chapter.scenes.findIndex(isBranchScene);
+  const scene = { id: `scene-${Date.now()}`, number: String(sceneNumber).padStart(2, '0'), title: `未命名场景 ${sceneNumber}`, kind: 'scene', branchId: '', background: '', blocks: [] };
+  if (insertionIndex < 0) chapter.scenes.push(scene); else chapter.scenes.splice(insertionIndex, 0, scene);
+  activeSceneIndex = chapter.scenes.indexOf(scene);
+  selectedBlockIndex = 0;
+  normalizeSceneNumbers(chapter);
+  renderChapters(); renderSceneTabs(); renderScene(); markDirty(); showToast('已添加新场景');
+}
+function addBranch(chapterIndex = activeChapterIndex) {
+  syncCurrentScene();
+  const chapter = desktopState.data?.chapters?.[chapterIndex];
+  if (!chapter) return;
+  chapter.branches ||= [];
+  const branchNumber = chapter.branches.length + 1;
+  const branchId = `branch-${Date.now()}`;
+  chapter.branches.push({ id: branchId, title: `未命名支线 ${branchNumber}`, trigger: '', includeInFlow: false });
+  const scene = { id: `branch-scene-${Date.now()}`, number: '01', title: '场景 1', kind: 'branch', branchId, background: '', blocks: [] };
+  chapter.scenes.push(scene);
+  expandedChapterIds.add(chapter.id);
+  expandedBranchIds.add(branchId);
+  activeChapterIndex = chapterIndex;
+  activeSceneIndex = chapter.scenes.indexOf(scene);
+  selectedBlockIndex = 0;
+  normalizeSceneNumbers(chapter);
+  renderChapters(); renderSceneTabs(); renderScene();
+  document.querySelector('[data-view="editor"]')?.click();
+  markDirty(); showToast('已添加支线');
+}
+function addBranchScene(chapterIndex, branchId) {
+  syncCurrentScene();
+  const chapter = desktopState.data?.chapters?.[chapterIndex];
+  const branch = (chapter?.branches || []).find((item) => item.id === branchId);
+  if (!chapter || !branch) return;
+  const existingScenes = branchScenes(chapter, branchId);
+  const sceneNumber = existingScenes.length + 1;
+  const scene = { id: `branch-scene-${Date.now()}`, number: String(sceneNumber).padStart(2, '0'), title: `场景 ${sceneNumber}`, kind: 'branch', branchId, background: '', blocks: [] };
+  const lastIndex = Math.max(...existingScenes.map((item) => chapter.scenes.indexOf(item)));
+  chapter.scenes.splice(Number.isFinite(lastIndex) ? lastIndex + 1 : chapter.scenes.length, 0, scene);
+  expandedChapterIds.add(chapter.id); expandedBranchIds.add(branchId);
+  activeChapterIndex = chapterIndex; activeSceneIndex = chapter.scenes.indexOf(scene); selectedBlockIndex = 0;
+  normalizeSceneNumbers(chapter); renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]')?.click(); markDirty(); showToast('已添加支线场景');
+}
+function normalizeSceneNumbers(chapter) {
+  let sceneNumber = 0;
+  const branchNumbers = new Map();
+  chapter.scenes.forEach((scene) => {
+    if (isBranchScene(scene)) { const next = (branchNumbers.get(scene.branchId) || 0) + 1; branchNumbers.set(scene.branchId, next); scene.number = String(next).padStart(2, '0'); }
+    else scene.number = String(++sceneNumber).padStart(2, '0');
+  });
+}
+function setBranchFlowParticipation(chapterIndex, sceneIndex, included) {
+  syncCurrentScene();
+  const chapter = desktopState.data?.chapters?.[chapterIndex];
+  const scene = chapter?.scenes?.[sceneIndex];
+  const branch = branchGroupForScene(scene, chapter);
+  if (!branch) return;
+  branch.includeInFlow = Boolean(included);
+  desktopState.data.sceneFlow = storyFlowTools.normalizeSceneFlow(desktopState.data.sceneFlow, desktopState.data.chapters);
+  renderChapters();
+  if (chapterIndex === activeChapterIndex && sceneIndex === activeSceneIndex) renderBranchTriggerPanel(scene);
+  if (!views.flow?.classList.contains('hidden')) renderSceneFlow();
+  markDirty();
+  showToast(branch.includeInFlow ? '支线已加入流程图' : '支线已从流程图移出');
+}
+document.getElementById('branchTriggerInput')?.addEventListener('input', (event) => {
+  const scene = currentScene();
+  const branch = branchGroupForScene(scene);
+  if (!branch) return;
+  branch.trigger = event.target.value;
+  markDirty();
+});
+document.getElementById('branchFlowToggle')?.addEventListener('click', () => {
+  const scene = currentScene();
+  const branch = branchGroupForScene(scene);
+  if (!branch) return;
+  setBranchFlowParticipation(activeChapterIndex, activeSceneIndex, !branch.includeInFlow);
+});
 function closeTreeContextMenu() { document.querySelector('.tree-context-menu')?.remove(); }
 function openTreeContextMenu(event, items) {
   event.preventDefault(); event.stopPropagation(); closeTreeContextMenu();
@@ -1161,7 +1294,12 @@ function moveScene(sceneInfo, targetChapterId, targetSceneId = null) {
   const sourceChapter = chapters.find((chapter) => chapter.id === sceneInfo.chapterId); const targetChapter = chapters.find((chapter) => chapter.id === targetChapterId);
   if (!sourceChapter || !targetChapter) return;
   const sourceIndex = sourceChapter.scenes.findIndex((scene) => scene.id === sceneInfo.sceneId); if (sourceIndex < 0) return;
+  const sourceScene = sourceChapter.scenes[sourceIndex];
+  const targetScene = targetSceneId ? targetChapter.scenes.find((scene) => scene.id === targetSceneId) : null;
+  if (isBranchScene(sourceScene) && (sourceChapter !== targetChapter || !isBranchScene(targetScene) || sourceScene.branchId !== targetScene.branchId)) { showToast('支线场景只能在所属支线内调整顺序'); return; }
+  if (!isBranchScene(sourceScene) && isBranchScene(targetScene)) { showToast('普通场景不能移入支线'); return; }
   if (sourceChapter !== targetChapter && sourceChapter.scenes.length <= 1) { showToast('每个章节至少需要保留一个场景'); return; }
+  if (sourceChapter !== targetChapter && !isBranchScene(sourceScene) && sourceChapter.scenes.filter((scene) => !isBranchScene(scene)).length <= 1) { showToast('每个章节至少需要保留一个普通场景'); return; }
   if (sourceChapter === targetChapter && targetSceneId === sceneInfo.sceneId) return;
   let targetIndex = targetSceneId ? targetChapter.scenes.findIndex((scene) => scene.id === targetSceneId) : targetChapter.scenes.length;
   if (targetIndex < 0) targetIndex = targetChapter.scenes.length;
@@ -1177,17 +1315,38 @@ async function deleteChapter(chapterIndex) {
   const chapter = chapters[chapterIndex]; if (!chapter || !(await requestDeleteConfirmation(`确定删除章节「${chapter.title}」及其中全部场景吗？`))) return;
   syncCurrentScene(); const activeChapterId = currentChapter()?.id; const activeSceneId = currentScene()?.id;
   chapters.splice(chapterIndex, 1); expandedChapterIds.delete(chapter.id);
+  desktopState.data.sceneFlow = storyFlowTools.normalizeSceneFlow(desktopState.data.sceneFlow, desktopState.data.chapters);
   const nextChapter = chapters[Math.min(chapterIndex, chapters.length - 1)]; const keepChapterId = activeChapterId === chapter.id ? nextChapter.id : activeChapterId; const keepSceneId = activeChapterId === chapter.id ? nextChapter.scenes[0]?.id : activeSceneId;
   expandedChapterIds.add(keepChapterId); finishTreeMutation(keepChapterId, keepSceneId, '章节已删除');
 }
 async function deleteScene(chapterIndex, sceneIndex) {
   const chapter = desktopState.data.chapters[chapterIndex];
   if (!chapter || chapter.scenes.length <= 1) { showToast('每个章节至少需要保留一个场景'); return; }
-  const scene = chapter.scenes[sceneIndex]; if (!scene || !(await requestDeleteConfirmation(`确定删除场景「${scene.title}」吗？`))) return;
+  const scene = chapter.scenes[sceneIndex]; const sceneType = isBranchScene(scene) ? '支线场景' : '场景';
+  if (!scene) return;
+  if (isBranchScene(scene) && branchScenes(chapter, scene.branchId).length <= 1) { showToast('每条支线至少需要保留一个场景，可从支线菜单删除整条支线'); return; }
+  if (!isBranchScene(scene) && chapter.scenes.filter((item) => !isBranchScene(item)).length <= 1) { showToast('每个章节至少需要保留一个普通场景'); return; }
+  if (!(await requestDeleteConfirmation(`确定删除${sceneType}「${scene.title}」吗？`))) return;
   syncCurrentScene(); const activeChapterId = currentChapter()?.id; const activeSceneId = currentScene()?.id;
   chapter.scenes.splice(sceneIndex, 1); normalizeSceneNumbers(chapter);
   const nextScene = chapter.scenes[Math.min(sceneIndex, chapter.scenes.length - 1)]; const keepSceneId = activeSceneId === scene.id ? nextScene.id : activeSceneId;
-  finishTreeMutation(activeChapterId, keepSceneId, '场景已删除');
+  desktopState.data.sceneFlow = storyFlowTools.normalizeSceneFlow(desktopState.data.sceneFlow, desktopState.data.chapters);
+  finishTreeMutation(activeChapterId, keepSceneId, `${sceneType}已删除`);
+}
+async function deleteBranch(chapterIndex, branchId) {
+  const chapter = desktopState.data.chapters[chapterIndex];
+  const branch = (chapter?.branches || []).find((item) => item.id === branchId);
+  if (!chapter || !branch || !(await requestDeleteConfirmation(`确定删除支线「${branch.title}」及其中全部场景吗？`))) return;
+  syncCurrentScene();
+  const activeSceneId = currentScene()?.id;
+  const deletedSceneIds = new Set(branchScenes(chapter, branchId).map((scene) => scene.id));
+  chapter.scenes = chapter.scenes.filter((scene) => scene.branchId !== branchId);
+  chapter.branches = chapter.branches.filter((item) => item.id !== branchId);
+  expandedBranchIds.delete(branchId);
+  normalizeSceneNumbers(chapter);
+  desktopState.data.sceneFlow = storyFlowTools.normalizeSceneFlow(desktopState.data.sceneFlow, desktopState.data.chapters);
+  const keepScene = deletedSceneIds.has(activeSceneId) ? chapter.scenes.find((scene) => !isBranchScene(scene)) || chapter.scenes[0] : chapter.scenes.find((scene) => scene.id === activeSceneId);
+  finishTreeMutation(chapter.id, keepScene?.id, '支线已删除');
 }
 function clearTreeDragState() { if (draggedChapterId || draggedSceneInfo) ignoreTreeClickUntil = Date.now() + 160; draggedChapterId = null; draggedSceneInfo = null; document.querySelectorAll('.chapter-tree-node,.chapter-scene-entry').forEach((item) => item.classList.remove('dragging', 'drag-over')); }
 async function renameChapterAt(chapterIndex) {
@@ -1210,6 +1369,17 @@ async function renameSceneAt(chapterIndex, sceneIndex) {
   if (chapterIndex === activeChapterIndex) { renderSceneTabs(); renderScene(); }
   markDirty();
 }
+async function renameBranchAt(chapterIndex, branchId) {
+  const branch = desktopState.data.chapters[chapterIndex]?.branches?.find((item) => item.id === branchId);
+  if (!branch) return;
+  const title = await requestTextInput('支线名称', branch.title);
+  if (!title) return;
+  branch.title = title;
+  renderChapters();
+  if (chapterIndex === activeChapterIndex && currentScene()?.branchId === branchId) renderScene();
+  if (!views.flow?.classList.contains('hidden')) renderSceneFlow();
+  markDirty();
+}
 function renderChapters() {
   const list = document.getElementById('chapterList');
   list.replaceChildren();
@@ -1228,7 +1398,7 @@ function renderChapters() {
       const wasActiveChapter = index === activeChapterIndex;
       expandedChapterIds.add(chapter.id);
       activeChapterIndex = index;
-      activeSceneIndex = wasActiveChapter ? Math.min(activeSceneIndex, chapter.scenes.length - 1) : 0;
+      activeSceneIndex = wasActiveChapter ? Math.min(activeSceneIndex, chapter.scenes.length - 1) : Math.max(0, chapter.scenes.findIndex((scene) => !isBranchScene(scene)));
       selectedBlockIndex = 0;
       renderChapters();
       renderSceneTabs();
@@ -1237,6 +1407,7 @@ function renderChapters() {
     });
     button.addEventListener('dblclick', (event) => { event.preventDefault(); renameChapterAt(index); });
     entry.addEventListener('contextmenu', (event) => openTreeContextMenu(event, [
+      { label: '添加支线', action: () => addBranch(index) },
       { label: '重命名章节', action: () => renameChapterAt(index) },
       { label: '删除章节', danger: true, action: () => deleteChapter(index) }
     ]));
@@ -1247,15 +1418,16 @@ function renderChapters() {
     treeNode.addEventListener('drop', (event) => { event.preventDefault(); event.stopPropagation(); if (draggedChapterId) moveChapter(draggedChapterId, chapter.id); else if (draggedSceneInfo) moveScene(draggedSceneInfo, chapter.id); clearTreeDragState(); });
     if (isExpanded) {
       const sceneList = addChild(treeNode, 'div', 'chapter-scene-list');
-      chapter.scenes.forEach((scene, sceneIndex) => {
-        const sceneEntry = addChild(sceneList, 'div', 'chapter-scene-entry');
-        const sceneButton = addChild(sceneEntry, 'button', `chapter-scene-file${index === activeChapterIndex && sceneIndex === activeSceneIndex ? ' active' : ''}`); sceneButton.draggable = true; sceneButton.title = '按住拖动场景，双击重命名';
+      const createSceneEntry = (parent, scene, sceneIndex, nestedBranch = false) => {
+        const sceneEntry = addChild(parent, 'div', `chapter-scene-entry${nestedBranch ? ' branch-scene' : ''}`);
+        const sceneButton = addChild(sceneEntry, 'button', `chapter-scene-file${nestedBranch ? ' branch-scene-file' : ''}${index === activeChapterIndex && sceneIndex === activeSceneIndex ? ' active' : ''}`); sceneButton.draggable = true; sceneButton.title = nestedBranch ? '按住拖动支线场景，双击重命名' : '按住拖动场景，双击重命名';
         addChild(sceneButton, 'span', 'scene-file-name', scene.title);
         addChild(sceneButton, 'span', 'scene-file-number', scene.number);
         sceneButton.addEventListener('click', () => {
           if (Date.now() < ignoreTreeClickUntil) return;
           syncCurrentScene();
           expandedChapterIds.add(chapter.id);
+          if (nestedBranch) expandedBranchIds.add(scene.branchId);
           activeChapterIndex = index;
           activeSceneIndex = sceneIndex;
           selectedBlockIndex = 0;
@@ -1274,7 +1446,38 @@ function renderChapters() {
         sceneEntry.addEventListener('dragover', (event) => { if (!draggedSceneInfo) return; event.preventDefault(); event.stopPropagation(); sceneEntry.classList.add('drag-over'); });
         sceneEntry.addEventListener('dragleave', () => sceneEntry.classList.remove('drag-over'));
         sceneEntry.addEventListener('drop', (event) => { event.preventDefault(); event.stopPropagation(); moveScene(draggedSceneInfo, chapter.id, scene.id); clearTreeDragState(); });
+      };
+      chapter.scenes.forEach((scene, sceneIndex) => { if (!isBranchScene(scene)) createSceneEntry(sceneList, scene, sceneIndex); });
+      (chapter.branches || []).forEach((branch) => {
+        const scenes = branchScenes(chapter, branch.id);
+        if (!scenes.length) return;
+        const isBranchExpanded = expandedBranchIds.has(branch.id);
+        const active = index === activeChapterIndex && currentScene()?.branchId === branch.id;
+        const branchGroup = addChild(sceneList, 'section', `chapter-branch-group${active ? ' active' : ''}`);
+        const branchEntry = addChild(branchGroup, 'div', 'chapter-branch-entry');
+        const branchToggle = addChild(branchEntry, 'button', 'chapter-branch-toggle', isBranchExpanded ? '▾' : '▸'); branchToggle.type = 'button'; branchToggle.title = isBranchExpanded ? '折叠支线' : '展开支线';
+        const branchButton = addChild(branchEntry, 'button', 'chapter-branch-button'); branchButton.type = 'button'; branchButton.title = `${branch.trigger || '尚未填写触发方式'} · ${branch.includeInFlow ? '已加入流程图' : '默认不参与流程图'}`;
+        addChild(branchButton, 'b', '', branch.title);
+        addChild(branchButton, 'span', `chapter-branch-flow${branch.includeInFlow ? ' included' : ''}`, branch.includeInFlow ? '流程中' : '支线');
+        addChild(branchEntry, 'span', 'chapter-branch-count', String(scenes.length));
+        branchToggle.addEventListener('click', () => { if (isBranchExpanded) expandedBranchIds.delete(branch.id); else expandedBranchIds.add(branch.id); renderChapters(); });
+        branchButton.addEventListener('click', () => { syncCurrentScene(); expandedChapterIds.add(chapter.id); expandedBranchIds.add(branch.id); activeChapterIndex = index; activeSceneIndex = chapter.scenes.indexOf(scenes[0]); selectedBlockIndex = 0; renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]')?.click(); });
+        branchButton.addEventListener('dblclick', (event) => { event.preventDefault(); renameBranchAt(index, branch.id); });
+        branchEntry.addEventListener('contextmenu', (event) => openTreeContextMenu(event, [
+          { label: '添加场景', action: () => addBranchScene(index, branch.id) },
+          { label: branch.includeInFlow ? '从流程图移出' : '添加到流程图', action: () => setBranchFlowParticipation(index, chapter.scenes.indexOf(scenes[0]), !branch.includeInFlow) },
+          { label: '重命名支线', action: () => renameBranchAt(index, branch.id) },
+          { label: '删除支线', danger: true, action: () => deleteBranch(index, branch.id) }
+        ]));
+        if (isBranchExpanded) {
+          const branchSceneList = addChild(branchGroup, 'div', 'chapter-branch-scene-list');
+          scenes.forEach((scene) => createSceneEntry(branchSceneList, scene, chapter.scenes.indexOf(scene), true));
+          const addSceneButton = addChild(branchSceneList, 'button', 'chapter-add-branch-scene', '＋ 添加场景'); addSceneButton.type = 'button'; addSceneButton.addEventListener('click', (event) => { event.stopPropagation(); addBranchScene(index, branch.id); });
+        }
       });
+      const addBranchButton = addChild(sceneList, 'button', 'chapter-add-branch', '＋ 添加支线');
+      addBranchButton.type = 'button';
+      addBranchButton.addEventListener('click', (event) => { event.stopPropagation(); addBranch(index); });
     }
   });
 }
@@ -1613,7 +1816,7 @@ async function renameProject() {
   markDirty();
   showToast(`项目已重命名为「${normalizedTitle}」`);
 }
-function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; itemDialogueEditorState = null; document.getElementById('itemDialogueEditor')?.classList.add('hidden'); document.body.classList.remove('item-dialogue-editor-open'); document.body.classList.remove('project-home-active'); views.home?.classList.add('hidden'); desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); updateProjectFolderAction(); document.querySelector('[data-view="editor"]')?.click(); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
+function applyProject(data, filePath = null, options = {}) { clearTimeout(autoSaveTimer); autoSaveQueued = false; itemDialogueEditorState = null; document.getElementById('itemDialogueEditor')?.classList.add('hidden'); document.body.classList.remove('item-dialogue-editor-open'); document.body.classList.remove('project-home-active'); views.home?.classList.add('hidden'); desktopState.data = data; desktopState.filePath = filePath; activeChapterIndex = 0; activeSceneIndex = 0; selectedBlockIndex = 0; newDialogueCharacterId = ''; expandedChapterIds.clear(); expandedBranchIds.clear(); if (data.chapters[0]) expandedChapterIds.add(data.chapters[0].id); updateProjectTitle(data.title); syncDialogueCreationState(); renderChapters(); renderSceneTabs(); renderScene(); renderImportedAssets(); desktopState.dirty = false; desktopApi?.setDirty(false); setProjectLocationStatus(filePath ? '本地项目' : '本地新项目'); setSaveStatus(filePath ? '已保存' : '未保存'); updateProjectFolderAction(); document.querySelector('[data-view="editor"]')?.click(); if (options.resetHistory !== false) resetProjectHistory(); else updateUndoAvailability(); }
 function applyOpenedProjectResult(result, successMessage = '') {
   applyProject(result.data, result.filePath);
   if (result.recoveredFromBackup) {
@@ -1843,6 +2046,11 @@ function nextPreviewSceneLocation() {
     const transition = ensureSceneFlow().transitions.find((item) => item.sourceSceneId === scene?.id);
     return transition ? sceneFlowLocation(transition.targetSceneId) : null;
   }
+  if (previewState?.scope === 'branch') {
+    const chapter = desktopState.data?.chapters?.[previewState.chapterIndex];
+    const nextSceneIndex = (chapter?.scenes || []).findIndex((scene, index) => index > previewState.sceneIndex && scene.branchId === previewState.scopeBranchId);
+    return nextSceneIndex >= 0 ? { chapterIndex: previewState.chapterIndex, sceneIndex: nextSceneIndex } : null;
+  }
   const chapters = desktopState.data?.chapters || [];
   return storyFlowTools.nextSequentialSceneLocation(chapters, previewState.chapterIndex, previewState.sceneIndex, previewState.scope === 'chapter');
 }
@@ -1861,7 +2069,10 @@ function previewLocationForBlockId(blockId) {
   return null;
 }
 function previewLocationInScope(location) {
-  return previewState?.scope !== 'chapter' || location?.chapterIndex === previewState.scopeChapterIndex;
+  if (previewState?.scope === 'branch') return desktopState.data?.chapters?.[location?.chapterIndex]?.scenes?.[location?.sceneIndex]?.branchId === previewState.scopeBranchId;
+  if (previewState?.scope !== 'chapter') return true;
+  const targetScene = desktopState.data?.chapters?.[location?.chapterIndex]?.scenes?.[location?.sceneIndex];
+  return location?.chapterIndex === previewState.scopeChapterIndex && !isBranchScene(targetScene);
 }
 function setPreviewScene(location, options = {}) {
   previewState = { ...options, chapterIndex: location.chapterIndex, sceneIndex: location.sceneIndex, blockIndex: location.blockIndex || 0, itemDialogueIndex: -1, mode: 'playing' };
@@ -1872,9 +2083,13 @@ function closeScenePreview() { document.getElementById('previewModal')?.classLis
 function startScenePreview() {
   syncCurrentScene();
   const chapter = desktopState.data?.chapters?.[activeChapterIndex];
-  const firstSceneIndex = chapter?.scenes?.length ? 0 : activeSceneIndex;
-  document.querySelector('.preview-title-copy span').textContent = '▶ 当前章节预览';
-  setPreviewScene({ chapterIndex: activeChapterIndex, sceneIndex: firstSceneIndex, blockIndex: 0 }, { followSceneFlow: false, scope: 'chapter', scopeChapterIndex: activeChapterIndex });
+  const activeScene = chapter?.scenes?.[activeSceneIndex];
+  const branchPreview = isBranchScene(activeScene);
+  const firstSceneIndex = branchPreview ? Math.max(0, (chapter?.scenes || []).findIndex((scene) => scene.branchId === activeScene.branchId)) : Math.max(0, (chapter?.scenes || []).findIndex((scene) => !isBranchScene(scene)));
+  document.querySelector('.preview-title-copy span').textContent = branchPreview ? '▶ 当前支线预览' : '▶ 当前章节预览';
+  setPreviewScene({ chapterIndex: activeChapterIndex, sceneIndex: firstSceneIndex, blockIndex: 0 }, branchPreview
+    ? { followSceneFlow: false, scope: 'branch', scopeChapterIndex: activeChapterIndex, scopeBranchId: activeScene.branchId }
+    : { followSceneFlow: false, scope: 'chapter', scopeChapterIndex: activeChapterIndex });
   document.getElementById('previewModal')?.classList.remove('hidden');
   requestAnimationFrame(() => document.getElementById('previewScene')?.focus());
 }
@@ -1893,7 +2108,7 @@ function advanceScenePreview(fromChoice = false) {
   if (previewState.mode === 'project-end') { closeScenePreview(); return; }
   if (previewState.mode === 'scene-end') {
     const nextScene = nextPreviewSceneLocation();
-    if (nextScene) setPreviewScene(nextScene, { followSceneFlow: previewState.followSceneFlow, scope: previewState.scope, scopeChapterIndex: previewState.scopeChapterIndex });
+    if (nextScene) setPreviewScene(nextScene, { followSceneFlow: previewState.followSceneFlow, scope: previewState.scope, scopeChapterIndex: previewState.scopeChapterIndex, scopeBranchId: previewState.scopeBranchId });
     else closeScenePreview();
     return;
   }
@@ -2106,14 +2321,16 @@ function renderSceneFlow() {
   const view = views.flow;
   if (!view || !desktopState.data || !storyFlowTools) return;
   const graph = ensureSceneFlow();
-  const sceneItems = storyFlowTools.flattenProjectScenes(desktopState.data.chapters);
+  const allSceneItems = storyFlowTools.flattenProjectScenes(desktopState.data.chapters);
+  const sceneItems = storyFlowTools.flattenFlowScenes(desktopState.data.chapters);
+  const excludedBranches = storyFlowTools.flattenProjectBranches(desktopState.data.chapters).filter((item) => item.branch.includeInFlow !== true);
   const sceneById = new Map(sceneItems.map((item) => [item.id, item]));
   const positions = new Map(sceneItems.map((item) => [item.id, graph.positions[item.id] || { x: 0.22 + item.sceneIndex * 0.31, y: 0.22 + item.chapterIndex * 0.3 }]));
   let flowZoom = Math.min(MAX_SCENE_FLOW_ZOOM, Math.max(MIN_SCENE_FLOW_ZOOM, Number(graph.viewport.zoom) || 1));
   sceneFlowResizeObserver?.disconnect(); sceneFlowResizeObserver = null;
   view.replaceChildren();
   const heading = addChild(view, 'div', 'scene-flow-heading');
-  const title = addChild(heading, 'div'); addChild(title, 'div', 'eyebrow', 'PROJECT STORY FLOW'); addChild(title, 'h2', '', '全项目流程图'); addChild(title, 'p', 'muted', `${sceneItems.length} 个场景 · ${graph.transitions.length} 条顺序连接`);
+  const title = addChild(heading, 'div'); addChild(title, 'div', 'eyebrow', 'PROJECT STORY FLOW'); addChild(title, 'h2', '', '全项目流程图'); addChild(title, 'p', 'muted', `${sceneItems.length} 个流程场景 · ${graph.transitions.length} 条顺序连接${excludedBranches.length ? ` · ${excludedBranches.length} 条支线待编排` : ''}`);
   const actions = addChild(heading, 'div', 'scene-flow-heading-actions');
   const zoomControls = addChild(actions, 'div', 'scene-flow-zoom-controls');
   const zoomOut = addChild(zoomControls, 'button', 'scene-flow-zoom-button', '−'); zoomOut.type = 'button'; zoomOut.title = '缩小流程图';
@@ -2122,6 +2339,19 @@ function renderSceneFlow() {
   const defaultOrder = addChild(actions, 'button', 'file-button', '默认顺序'); defaultOrder.type = 'button';
   const resetLayout = addChild(actions, 'button', 'file-button', '重置布局'); resetLayout.type = 'button';
   const preview = addChild(actions, 'button', 'primary-button', '▶ 完整预览'); preview.type = 'button';
+  if (excludedBranches.length) {
+    const tray = addChild(view, 'section', 'scene-flow-branch-tray');
+    const trayHeading = addChild(tray, 'div', 'scene-flow-branch-tray-heading');
+    const trayCopy = addChild(trayHeading, 'div'); addChild(trayCopy, 'b', '', '待编排支线'); addChild(trayCopy, 'span', '', '默认不参与流程，手动加入后可连接和预览');
+    const trayList = addChild(tray, 'div', 'scene-flow-branch-tray-list');
+    excludedBranches.forEach((item) => {
+      const branch = addChild(trayList, 'button', 'scene-flow-branch-chip'); branch.type = 'button'; branch.title = item.branch.trigger || '尚未填写触发方式';
+      addChild(branch, 'span', 'scene-flow-branch-chip-chapter', item.chapter.title);
+      addChild(branch, 'b', '', `${item.branch.title} · ${item.scenes.length} 场`);
+      addChild(branch, 'span', 'scene-flow-branch-chip-add', '＋ 加入');
+      branch.addEventListener('click', () => setBranchFlowParticipation(item.chapterIndex, item.scenes[0].sceneIndex, true));
+    });
+  }
   const surface = addChild(view, 'div', 'scene-flow-surface'); surface.tabIndex = 0;
   const edgeLayer = addChild(surface, 'div', 'scene-flow-edge-layer');
   const nodeLayer = addChild(surface, 'div', 'scene-flow-node-layer');
@@ -2191,9 +2421,13 @@ function renderSceneFlow() {
     sceneItems.forEach((item) => {
       const transition = graph.transitions.find((entry) => entry.sourceSceneId === item.id);
       const targetScene = transition ? sceneById.get(transition.targetSceneId) : null;
-      const sceneNode = addChild(nodeLayer, 'article', `scene-flow-node${graph.startSceneId === item.id ? ' start' : ''}`); sceneNode.dataset.sceneId = item.id;
-      const nodeHeader = addChild(sceneNode, 'div', 'scene-flow-node-header'); addChild(nodeHeader, 'span', 'scene-flow-chapter', item.chapter.title);
-      const startButton = addChild(nodeHeader, 'button', 'scene-flow-start', graph.startSceneId === item.id ? '起点' : '设为起点'); startButton.type = 'button'; startButton.title = '设置完整预览起点';
+      const branchScene = isBranchScene(item.scene);
+      const sceneNode = addChild(nodeLayer, 'article', `scene-flow-node${branchScene ? ' branch' : ''}${graph.startSceneId === item.id ? ' start' : ''}`); sceneNode.dataset.sceneId = item.id;
+      const nodeHeader = addChild(sceneNode, 'div', 'scene-flow-node-header');
+      const nodeIdentity = addChild(nodeHeader, 'div', 'scene-flow-node-identity'); addChild(nodeIdentity, 'span', 'scene-flow-chapter', branchScene ? `${item.chapter.title} · ${item.branch?.title || '支线'}` : item.chapter.title); if (branchScene) addChild(nodeIdentity, 'span', 'scene-flow-branch-badge', '支线');
+      const nodeHeaderActions = addChild(nodeHeader, 'div', 'scene-flow-node-header-actions');
+      const startButton = addChild(nodeHeaderActions, 'button', 'scene-flow-start', graph.startSceneId === item.id ? '起点' : '设为起点'); startButton.type = 'button'; startButton.title = '设置完整预览起点';
+      if (branchScene) { const removeBranch = addChild(nodeHeaderActions, 'button', 'scene-flow-remove-branch', '×'); removeBranch.type = 'button'; removeBranch.title = '从流程图移出支线'; removeBranch.addEventListener('click', (event) => { event.stopPropagation(); setBranchFlowParticipation(item.chapterIndex, item.sceneIndex, false); }); }
       const body = addChild(sceneNode, 'div', 'scene-flow-node-body'); addChild(body, 'h3', '', item.scene.title); addChild(body, 'p', '', `${item.scene.blocks?.length || 0} 个内容块`);
       const footer = addChild(sceneNode, 'div', 'scene-flow-node-footer'); addChild(footer, 'span', '', targetScene ? `下一场 · ${targetScene.scene.title}` : '流程终点');
       const open = addChild(footer, 'button', 'scene-flow-open', '↗'); open.type = 'button'; open.title = '打开场景';
@@ -2325,10 +2559,17 @@ document.addEventListener('click', (event) => {
 document.getElementById('dialogueCharacterPickerButton')?.addEventListener('click', (event) => { event.stopPropagation(); const menu = document.getElementById('dialogueCharacterMenu'); setDialogueCharacterMenuOpen(Boolean(menu?.hidden)); });
 document.addEventListener('click', (event) => { if (!event.target.closest('#dialogueCharacterPicker')) setDialogueCharacterMenuOpen(false); });
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setDialogueCharacterMenuOpen(false); });
-document.addEventListener('input', (event) => { if (event.target.closest('[contenteditable="true"]')) { if (event.target.closest('.segment-title')) renderSegmentNavigator(); updateSceneWordCount(); markDirty(); } else if (event.target.classList.contains('choice-option-text')) { updateSceneWordCount(); } });
+document.addEventListener('input', (event) => {
+  if (event.target.closest('#itemDialogueEditor')) return;
+  if (event.target.closest('[contenteditable="true"]')) {
+    if (event.target.closest('.segment-title')) renderSegmentNavigator();
+    updateSceneWordCount();
+    markDirty();
+  } else if (event.target.classList.contains('choice-option-text')) updateSceneWordCount();
+});
 document.querySelector('[title="撤销"]')?.addEventListener('click', undoProjectChange);
 document.querySelector('[title="重做"]')?.addEventListener('click', redoProjectChange);
-document.getElementById('addChapter')?.addEventListener('click', () => { const chapters = desktopState.data.chapters; const chapterNumber = chapters.length + 1; const chapter = { id: `chapter-${Date.now()}`, title: `未命名章节 ${chapterNumber}`, status: '草稿', scenes: [{ id: `scene-${Date.now()}`, number: '01', title: '未命名场景', blocks: [] }] }; chapters.push(chapter); expandedChapterIds.add(chapter.id); activeChapterIndex = chapters.length - 1; activeSceneIndex = 0; renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]').click(); markDirty(); showToast('已添加新章节'); });
+document.getElementById('addChapter')?.addEventListener('click', () => { const chapters = desktopState.data.chapters; const chapterNumber = chapters.length + 1; const chapter = { id: `chapter-${Date.now()}`, title: `未命名章节 ${chapterNumber}`, status: '草稿', scenes: [{ id: `scene-${Date.now()}`, number: '01', title: '未命名场景', kind: 'scene', branchId: '', background: '', blocks: [] }], branches: [] }; chapters.push(chapter); expandedChapterIds.add(chapter.id); activeChapterIndex = chapters.length - 1; activeSceneIndex = 0; renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]').click(); markDirty(); showToast('已添加新章节'); });
 function setWindowProjectMenuOpen(open) {
   const menu = document.getElementById('windowProjectMenu'); const button = document.getElementById('projectMenuButton');
   if (!menu || !button) return;
@@ -2811,8 +3052,13 @@ function collectProjectSearchResults(query) {
   if (matches(desktopState.data.title)) results.push({ type: '项目', title: desktopState.data.title, detail: desktopState.filePath || '尚未保存到磁盘', view: 'editor', chapterIndex: activeChapterIndex, sceneIndex: activeSceneIndex });
   (desktopState.data.chapters || []).forEach((chapter, chapterIndex) => {
     if (matches(chapter.title, chapter.status)) results.push({ type: '章节', title: chapter.title, detail: `${chapter.scenes.length} 个场景`, view: 'editor', chapterIndex, sceneIndex: 0 });
+    (chapter.branches || []).forEach((branch) => {
+      const sceneIndex = chapter.scenes.findIndex((scene) => scene.branchId === branch.id);
+      if (sceneIndex >= 0 && matches(branch.title, branch.trigger)) results.push({ type: '支线', title: branch.title, detail: branch.trigger || chapter.title, view: 'editor', chapterIndex, sceneIndex, branchId: branch.id });
+    });
     (chapter.scenes || []).forEach((scene, sceneIndex) => {
-      if (matches(scene.title, scene.number)) results.push({ type: '场景', title: scene.title, detail: chapter.title, view: 'editor', chapterIndex, sceneIndex });
+      const branch = branchGroupForScene(scene, chapter);
+      if (matches(scene.title, scene.number)) results.push({ type: isBranchScene(scene) ? '支线场景' : '场景', title: scene.title, detail: branch ? `${chapter.title} / ${branch.title}` : chapter.title, view: 'editor', chapterIndex, sceneIndex, branchId: branch?.id || '' });
       (scene.blocks || []).forEach((block, blockIndex) => {
         const linkedItem = block.type === 'item' ? (desktopState.data.items || []).find((item) => item.id === block.itemId) : null;
         if (block.type === 'item') {
@@ -2849,7 +3095,7 @@ function navigateToProjectSearchResult(result) {
   if (result.view === 'editor') {
     syncCurrentScene(); activeChapterIndex = result.chapterIndex; activeSceneIndex = result.sceneIndex; selectedBlockIndex = result.blockIndex ?? 0;
     selectedItemDialogueId = result.itemDialogueId || '';
-    expandedChapterIds.add(currentChapter().id); renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]')?.click();
+    expandedChapterIds.add(currentChapter().id); if (result.branchId) expandedBranchIds.add(result.branchId); renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]')?.click();
     if (Number.isInteger(result.blockIndex)) requestAnimationFrame(() => document.querySelector(`.script-block[data-block-index="${result.blockIndex}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
   } else {
     document.querySelector(`[data-view="${result.view}"]`)?.click();
@@ -3210,15 +3456,15 @@ function syncItemInstanceSummary(itemBlock) {
   }
 }
 function createItemDialogueDetailCard(dialogue, index, itemBlock) {
-  const card = createBlockElement(dialogue, index);
+  const scene = itemDialogueEditorScene();
+  const itemBlockIndex = scene?.blocks?.findIndex((block) => block.id === itemBlock.id) ?? -1;
+  const perspectiveCharacterId = itemBlockIndex >= 0 ? perspectiveCharacterIdAt(itemBlockIndex) : '';
+  const card = createBlockElement(dialogue, index, { perspectiveCharacterId });
   card.classList.add('item-dialogue-detail-card');
   card.classList.toggle('selected', dialogue.id === selectedItemDialogueId);
   card.dataset.dialogueId = dialogue.id;
   card.dataset.blockIndex = String(index);
   card.classList.remove('pov-dialogue');
-  const scene = itemDialogueEditorScene();
-  const itemBlockIndex = scene?.blocks?.findIndex((block) => block.id === itemBlock.id) ?? -1;
-  const perspectiveCharacterId = itemBlockIndex >= 0 ? perspectiveCharacterIdAt(itemBlockIndex) : '';
   if (perspectiveCharacterId && perspectiveCharacterId === dialogue.characterId) card.classList.add('pov-dialogue');
   const paragraph = card.querySelector('.block-content p');
   if (paragraph) {
@@ -3227,6 +3473,7 @@ function createItemDialogueDetailCard(dialogue, index, itemBlock) {
       dialogue.text = richTextPlainText(paragraph);
       dialogue.textHtml = sanitizeRichTextHtml(paragraph.innerHTML);
       syncItemInstanceSummary(itemBlock);
+      updateSceneWordCount();
       markDirty();
     });
   }
@@ -3328,6 +3575,7 @@ function renderItemDialogueEditor() {
   investigation.oninput = () => {
     itemBlock.investigation.text = investigation.value;
     syncItemInstanceSummary(itemBlock);
+    updateSceneWordCount();
     markDirty();
   };
   const list = document.getElementById('itemDialogueDetailList');
@@ -3432,6 +3680,7 @@ function renderInspector() {
       selectedBlock.investigation.text = investigationText.value;
       const display = document.querySelector(`.script-block[data-block-id="${selectedBlock.id}"] .script-item-investigation-text`);
       if (display) { display.textContent = investigationText.value || '尚未填写调查反应'; display.classList.toggle('empty', !investigationText.value.trim()); }
+      updateSceneWordCount();
       markDirty();
     });
     const dialogueOverview = createInspectorSection(body, '角色对白', '物品卡仅展示摘要；进入专用界面后可像普通剧本对白一样编辑。');

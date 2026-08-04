@@ -83,6 +83,39 @@ test('项目索引保持精简并将每个场景保存为独立 JSON', async (te
   assert.equal(opened.data.items[0].coverImageId, 'image-a');
 });
 
+test('支线触发方式随场景分卷保存且可完整恢复', async (testContext) => {
+  const { root, projectPath } = await createTemporaryProject(testContext);
+  const project = projectFixture('支线分卷测试');
+  project.chapters[0].branches = [{ id: 'branch-hidden-room', title: '隐藏房间支线', trigger: '调查仓库书架并持有黄铜钥匙', includeInFlow: false }];
+  project.chapters[0].scenes.push({
+    id: 'branch-hidden-room-1',
+    number: '01',
+    title: '发现暗门',
+    kind: 'branch',
+    branchId: 'branch-hidden-room',
+    blocks: [{ id: 'branch-dialogue', type: 'narration', text: '暗门缓慢打开。' }],
+  });
+  project.chapters[0].scenes.push({ id: 'branch-hidden-room-2', number: '02', title: '进入密室', kind: 'branch', branchId: 'branch-hidden-room', blocks: [] });
+
+  await writeProjectFile(projectPath, project);
+  const manifest = JSON.parse(await fs.readFile(projectPath, 'utf8'));
+  const chapterDocument = JSON.parse(await fs.readFile(path.join(root, ...manifest.files.chapters.split('/')), 'utf8'));
+  const firstChapter = JSON.parse(await fs.readFile(path.join(root, ...chapterDocument.chapters[0].file.split('/')), 'utf8'));
+  const branchReference = firstChapter.scenes.find((scene) => scene.id === 'branch-hidden-room-1');
+  const branchDocument = JSON.parse(await fs.readFile(path.join(root, ...branchReference.file.split('/')), 'utf8'));
+  assert.equal(branchDocument.scene.kind, 'branch');
+  assert.equal(branchDocument.scene.branchId, 'branch-hidden-room');
+  assert.equal(Object.hasOwn(branchDocument.scene, 'branchTrigger'), false);
+  assert.deepEqual(firstChapter.branches, project.chapters[0].branches);
+
+  const opened = await readProjectFile(projectPath);
+  const branch = opened.data.chapters[0].branches[0];
+  const scenes = opened.data.chapters[0].scenes.filter((scene) => scene.branchId === branch.id);
+  assert.equal(branch.trigger, '调查仓库书架并持有黄铜钥匙');
+  assert.equal(scenes.length, 2);
+  assert.equal(scenes[0].blocks[0].text, '暗门缓慢打开。');
+});
+
 test('保存只保留当前与上一版本并让备份指向可恢复版本', async (testContext) => {
   const { root, projectPath } = await createTemporaryProject(testContext);
   const first = await writeProjectFile(projectPath, projectFixture('第一版'));
