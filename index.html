@@ -116,8 +116,8 @@
     <section class="item-dialogue-editor hidden" id="itemDialogueEditor" aria-hidden="true">
       <header class="item-dialogue-editor-header">
         <button class="item-dialogue-editor-back" id="closeItemDialogueEditor" type="button" title="返回剧本编辑器" aria-label="返回剧本编辑器">←</button>
-        <div class="item-dialogue-editor-heading"><span>ITEM DIALOGUE EDITOR</span><h2 id="itemDialogueEditorTitle">物品角色对白</h2><p id="itemDialogueEditorContext">当前场景</p></div>
-        <div class="item-dialogue-editor-count" id="itemDialogueEditorCount">0 条对白</div>
+        <div class="item-dialogue-editor-heading"><span>ITEM CONTENT EDITOR</span><h2 id="itemDialogueEditorTitle">物品内容</h2><p id="itemDialogueEditorContext">当前场景</p></div>
+        <div class="item-dialogue-editor-count" id="itemDialogueEditorCount">0 项内容</div>
       </header>
       <div class="item-dialogue-editor-layout">
         <main class="item-dialogue-editor-main">
@@ -126,16 +126,20 @@
             <textarea id="itemInvestigationDetailInput" rows="3" placeholder="输入玩家调查该物品后显示的文案…"></textarea>
           </section>
           <section class="item-dialogue-detail-canvas">
-            <div class="item-dialogue-detail-toolbar"><span>角色对白流</span><small>拖动左侧手柄调整顺序</small></div>
+            <div class="item-dialogue-detail-toolbar"><span>物品内容流</span><small>所有内容类型均可复用、嵌套和拖动排序</small></div>
             <div class="item-dialogue-detail-list" id="itemDialogueDetailList"></div>
             <div class="item-dialogue-detail-add" id="itemDialogueDetailAdd">
               <select id="itemDialogueNewCharacter" aria-label="设置新增对白角色"></select>
-              <button type="button" id="addItemDialogueDetail">＋ 添加角色对白</button>
+              <button type="button" data-item-content-type="dialogue">＋ 对话</button>
+              <button type="button" data-item-content-type="choice">＋ 选择</button>
+              <button type="button" data-item-content-type="narration">＋ 旁白</button>
+              <button type="button" data-item-content-type="item">＋ 物品</button>
+              <button type="button" data-item-content-type="segment">＋ 分段</button>
             </div>
           </section>
         </main>
         <aside class="item-dialogue-detail-inspector">
-          <div class="item-dialogue-detail-inspector-header">对白属性</div>
+          <div class="item-dialogue-detail-inspector-header">内容属性</div>
           <div class="item-dialogue-detail-inspector-body" id="itemDialogueDetailInspector"></div>
         </aside>
       </div>

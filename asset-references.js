@@ -3,6 +3,13 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.RropewayAssetReferences = api;
 }(typeof globalThis !== 'undefined' ? globalThis : this, () => {
+  function walkItemContent(itemBlock, visitor) {
+    (itemBlock?.blocks || []).forEach((contentBlock) => {
+      visitor(contentBlock);
+      if (contentBlock?.type === 'item') walkItemContent(contentBlock, visitor);
+    });
+  }
+
   function removeAssetReferences(project, relativePath) {
     if (!project || !relativePath) return 0;
     let referenceCount = 0;
@@ -11,9 +18,14 @@
       (scene.blocks || []).forEach((block) => {
         if (block.type === 'dialogue' && block.avatar === relativePath) { delete block.avatar; referenceCount += 1; }
         if (block.type === 'dialogue' && block.portrait === relativePath) { delete block.portrait; referenceCount += 1; }
-        if (block.type === 'item') (block.dialogues || []).forEach((dialogue) => {
-          if (dialogue.avatar === relativePath) { delete dialogue.avatar; referenceCount += 1; }
-          if (dialogue.portrait === relativePath) { delete dialogue.portrait; referenceCount += 1; }
+        if (block.type === 'item') walkItemContent(block, (contentBlock) => {
+          if (contentBlock.avatar === relativePath) { delete contentBlock.avatar; referenceCount += 1; }
+          if (contentBlock.portrait === relativePath) { delete contentBlock.portrait; referenceCount += 1; }
+          if (contentBlock.type === 'segment' && Array.isArray(contentBlock.images)) {
+            const remaining = contentBlock.images.filter((image) => image.relativePath !== relativePath);
+            referenceCount += contentBlock.images.length - remaining.length;
+            contentBlock.images = remaining;
+          }
         });
         if (block.type === 'segment' && Array.isArray(block.images)) {
           const remaining = block.images.filter((image) => image.relativePath !== relativePath);
@@ -53,7 +65,7 @@
       (scene?.blocks || []).forEach((block) => {
         add(block?.portrait);
         add(block?.avatar);
-        (block?.dialogues || []).forEach((dialogue) => { add(dialogue?.portrait); add(dialogue?.avatar); });
+        if (block?.type === 'item') walkItemContent(block, (contentBlock) => { add(contentBlock?.portrait); add(contentBlock?.avatar); (contentBlock?.images || []).forEach((image) => add(image?.relativePath)); });
         (block?.images || []).forEach((image) => add(image?.relativePath));
       });
     }));

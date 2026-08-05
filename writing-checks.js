@@ -9,6 +9,14 @@
     return String(value || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
   }
 
+  function walkItemContent(itemBlock, visitor, parentPath = []) {
+    (itemBlock?.blocks || []).forEach((contentBlock, index) => {
+      const path = [...parentPath, index];
+      visitor(contentBlock, path);
+      if (contentBlock?.type === 'item') walkItemContent(contentBlock, visitor, path);
+    });
+  }
+
   function collectWritingIssues(project) {
     const issues = [];
     const chapters = Array.isArray(project?.chapters) ? project.chapters : [];
@@ -50,7 +58,11 @@
         (scene.blocks || []).forEach((block, blockIndex) => {
           const location = { view: 'editor', chapterIndex, sceneIndex, blockIndex };
           if (block.type === 'dialogue') inspectDialogue(block, location, chapter, scene);
-          if (block.type === 'item') (block.dialogues || []).forEach((dialogue) => inspectDialogue(dialogue, { ...location, itemDialogueId: dialogue.id }, chapter, scene));
+          if (block.type === 'item') walkItemContent(block, (contentBlock, itemContentPath) => {
+            const contentLocation = { ...location, itemDialogueId: contentBlock.id, itemContentPath };
+            if (contentBlock.type === 'dialogue') inspectDialogue(contentBlock, contentLocation, chapter, scene);
+            if (contentBlock.type === 'segment') (contentBlock.images || []).forEach((image) => addAssetReference(image.relativePath, '物品分段图片', contentLocation));
+          });
           if (block.type === 'segment') (block.images || []).forEach((image) => addAssetReference(image.relativePath, '分段图片', location));
         });
       });
@@ -60,14 +72,17 @@
     chapters.forEach((chapter, chapterIndex) => {
       (chapter.scenes || []).forEach((scene, sceneIndex) => {
         (scene.blocks || []).forEach((block, blockIndex) => {
-          if (block.type !== 'choice') return;
           const location = { view: 'editor', chapterIndex, sceneIndex, blockIndex };
-          (block.options || []).forEach((option, optionIndex) => {
-            const value = typeof option === 'string' ? { text: option, targetBlockId: '' } : option || {};
-            if (!plainText(value.text)) addIssue({ severity: 'error', category: '未关联选项', title: `选项 ${optionIndex + 1} 内容为空`, detail: `${chapter.title} / ${scene.title}`, location });
-            if (!value.targetBlockId) addIssue({ severity: 'warning', category: '未关联选项', title: `“${plainText(value.text) || `选项 ${optionIndex + 1}`}”未关联关键节点`, detail: `${chapter.title} / ${scene.title}`, location });
-            else if (!criticalIds.has(String(value.targetBlockId))) addIssue({ severity: 'error', category: '未关联选项', title: `“${plainText(value.text) || `选项 ${optionIndex + 1}`}”的目标已失效`, detail: String(value.targetBlockId), location });
+          const choices = block.type === 'choice' ? [{ block, location }] : [];
+          if (block.type === 'item') walkItemContent(block, (contentBlock, itemContentPath) => {
+            if (contentBlock.type === 'choice') choices.push({ block: contentBlock, location: { ...location, itemDialogueId: contentBlock.id, itemContentPath } });
           });
+          choices.forEach(({ block: choice, location: choiceLocation }) => (choice.options || []).forEach((option, optionIndex) => {
+            const value = typeof option === 'string' ? { text: option, targetBlockId: '' } : option || {};
+            if (!plainText(value.text)) addIssue({ severity: 'error', category: '未关联选项', title: `选项 ${optionIndex + 1} 内容为空`, detail: `${chapter.title} / ${scene.title}`, location: choiceLocation });
+            if (!value.targetBlockId) addIssue({ severity: 'warning', category: '未关联选项', title: `“${plainText(value.text) || `选项 ${optionIndex + 1}`}”未关联关键节点`, detail: `${chapter.title} / ${scene.title}`, location: choiceLocation });
+            else if (!criticalIds.has(String(value.targetBlockId))) addIssue({ severity: 'error', category: '未关联选项', title: `“${plainText(value.text) || `选项 ${optionIndex + 1}`}”的目标已失效`, detail: String(value.targetBlockId), location: choiceLocation });
+          }));
         });
       });
     });

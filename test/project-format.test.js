@@ -166,18 +166,19 @@ test('支线会保存触发方式且默认排除在流程图之外', () => {
   assert.deepEqual(project.sceneFlow.transitions, [{ sourceSceneId: 'scene-main', targetSceneId: 'scene-branch-flow' }]);
 });
 
-test('项目会保存物品库以及每次插入的独立调查反应和角色对白', () => {
+test('项目会保存物品库以及每次插入的独立调查反应和完整内容流', () => {
   const project = normalizeProject({
     items: [{ id: 'item-a', name: '旧怀表', tags: ['线索'], effect: '记录隐藏时间' }],
     chapters: [{ scenes: [{ blocks: [
-      { id: 'item-block-a', type: 'item', itemId: 'item-a', investigation: { text: '表盖内侧有一道划痕。' }, dialogues: [{ id: 'dialogue-a', characterId: 'character-a', text: '它停在三点十七分。' }] },
-      { id: 'item-block-b', type: 'item', itemId: 'item-a', investigation: { text: '指针已经重新走动。' }, dialogues: [] }
+      { id: 'item-block-a', type: 'item', itemId: 'item-a', investigation: { text: '表盖内侧有一道划痕。' }, blocks: [{ id: 'dialogue-a', type: 'dialogue', characterId: 'character-a', text: '它停在三点十七分。' }, { id: 'narration-a', type: 'narration', text: '秒针忽然跳了一格。' }, { id: 'segment-a', type: 'segment', title: '怀表异变' }] },
+      { id: 'item-block-b', type: 'item', itemId: 'item-a', investigation: { text: '指针已经重新走动。' }, blocks: [] }
     ] }] }]
   });
   assert.equal(project.items[0].name, '旧怀表');
   const [first, second] = project.chapters[0].scenes[0].blocks;
   assert.equal(first.investigation.text, '表盖内侧有一道划痕。');
-  assert.equal(first.dialogues[0].text, '它停在三点十七分。');
+  assert.equal(first.blocks[0].text, '它停在三点十七分。');
+  assert.deepEqual(first.blocks.map((block) => block.type), ['dialogue', 'narration', 'segment']);
   assert.equal(second.investigation.text, '指针已经重新走动。');
   assert.notEqual(first.id, second.id);
 });

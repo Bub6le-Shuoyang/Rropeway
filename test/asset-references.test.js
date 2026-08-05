@@ -9,7 +9,7 @@ test('删除素材会清理场景、对白、分段和角色立绘引用', () =>
       background: relativePath,
       blocks: [
         { type: 'dialogue', avatar: relativePath, portrait: relativePath },
-        { type: 'item', itemId: 'item-a', dialogues: [{ avatar: relativePath, portrait: relativePath }] },
+        { type: 'item', itemId: 'item-a', blocks: [{ type: 'dialogue', avatar: relativePath, portrait: relativePath }, { type: 'segment', images: [{ relativePath }] }, { type: 'item', itemId: 'item-b', blocks: [{ type: 'dialogue', avatar: relativePath }, { type: 'segment', images: [{ relativePath }] }] }] },
         { type: 'segment', images: [{ relativePath }, { relativePath: 'assets/images/keep.png' }] }
       ]
     }] }],
@@ -17,12 +17,15 @@ test('删除素材会清理场景、对白、分段和角色立绘引用', () =>
     items: [{ coverImageId: 'remove-image', images: [{ id: 'remove-image', relativePath }, { id: 'keep-image', relativePath: 'assets/images/keep.png' }] }]
   };
 
-  assert.equal(removeAssetReferences(project, relativePath), 10);
+  assert.equal(removeAssetReferences(project, relativePath), 13);
   assert.equal(project.chapters[0].scenes[0].background, '');
   assert.equal(project.chapters[0].scenes[0].blocks[0].portrait, undefined);
   assert.equal(project.chapters[0].scenes[0].blocks[0].avatar, undefined);
-  assert.equal(project.chapters[0].scenes[0].blocks[1].dialogues[0].avatar, undefined);
-  assert.equal(project.chapters[0].scenes[0].blocks[1].dialogues[0].portrait, undefined);
+  assert.equal(project.chapters[0].scenes[0].blocks[1].blocks[0].avatar, undefined);
+  assert.equal(project.chapters[0].scenes[0].blocks[1].blocks[0].portrait, undefined);
+  assert.deepEqual(project.chapters[0].scenes[0].blocks[1].blocks[1].images, []);
+  assert.equal(project.chapters[0].scenes[0].blocks[1].blocks[2].blocks[0].avatar, undefined);
+  assert.deepEqual(project.chapters[0].scenes[0].blocks[1].blocks[2].blocks[1].images, []);
   assert.deepEqual(project.chapters[0].scenes[0].blocks[2].images, [{ relativePath: 'assets/images/keep.png' }]);
   assert.deepEqual(project.characters[0].avatarGroup, []);
   assert.deepEqual(project.characters[0].portraitGroup, ['assets/images/keep.png']);
@@ -33,7 +36,7 @@ test('删除素材会清理场景、对白、分段和角色立绘引用', () =>
 test('整理旧项目时只收集项目实际引用的素材路径', () => {
   const project = {
     assets: [{ relativePath: 'assets/images/library.png' }, { fileName: 'assets/audio/voice.ogg' }],
-    chapters: [{ scenes: [{ background: 'assets/images/background.png', blocks: [{ portrait: 'assets/images/portrait.png' }, { type: 'item', dialogues: [{ avatar: 'assets/images/item-speaker.png' }] }, { images: [{ relativePath: 'assets/images/slide.png' }, { relativePath: '../outside.png' }] }] }] }],
+    chapters: [{ scenes: [{ background: 'assets/images/background.png', blocks: [{ portrait: 'assets/images/portrait.png' }, { type: 'item', blocks: [{ type: 'dialogue', avatar: 'assets/images/item-speaker.png' }, { type: 'segment', images: [{ relativePath: 'assets/images/item-slide.png' }] }, { type: 'item', blocks: [{ type: 'dialogue', portrait: 'assets/images/nested-portrait.png' }] }] }, { images: [{ relativePath: 'assets/images/slide.png' }, { relativePath: '../outside.png' }] }] }] }],
     characters: [{ avatarGroup: [{ relativePath: 'assets/images/avatar.png' }], portraitGroup: ['assets/images/portrait.png', { relativePath: 'assets/images/alternate.png' }] }],
     items: [{ images: [{ relativePath: 'assets/items/item-a/images/item.png' }] }]
   };
@@ -42,8 +45,10 @@ test('整理旧项目时只收集项目实际引用的素材路径', () => {
     'assets/images/alternate.png',
     'assets/images/avatar.png',
     'assets/images/background.png',
+    'assets/images/item-slide.png',
     'assets/images/item-speaker.png',
     'assets/images/library.png',
+    'assets/images/nested-portrait.png',
     'assets/images/portrait.png',
     'assets/images/slide.png',
     'assets/items/item-a/images/item.png'

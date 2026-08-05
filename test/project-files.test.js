@@ -24,7 +24,7 @@ function projectFixture(title = '分卷存储测试') {
     title,
     description: '验证每个场景独立保存。',
     characters: [{ id: 'character-a', name: '林夏', color: '#ed6b4d' }],
-    items: [{ id: 'item-key', name: '仓库钥匙', tags: ['线索'], summary: '锈迹斑斑。', images: [{ id: 'image-a', name: '正面', relativePath: 'assets/items/item-key/images/front.png' }], coverImageId: 'image-a' }],
+    items: [{ id: 'item-key', name: '仓库钥匙', tags: ['线索'], summary: '锈迹斑斑。', images: [{ id: 'image-a', name: '正面', relativePath: 'assets/items/item-key/images/front.png' }], coverImageId: 'image-a' }, { id: 'item-box', name: '木盒', tags: ['容器'], images: [] }],
     assets: [{ id: 'asset-a', name: '码头', relativePath: 'assets/images/harbor.png' }],
     chapters: [
       {
@@ -34,7 +34,7 @@ function projectFixture(title = '分卷存储测试') {
           { id: 'scene-a', number: '01', title: '抵达码头', blocks: [{ id: 'dialogue-a', type: 'dialogue', characterId: 'character-a', character: '林夏', text: '船已经靠岸。' }] },
           { id: 'scene-b', number: '02', title: '进入仓库', blocks: [
             { id: 'narration-a', type: 'narration', text: '门轴发出沉闷的响声。' },
-            { id: 'item-instance-a', type: 'item', itemId: 'item-key', investigation: { text: '钥匙背面刻着仓库编号。' }, dialogues: [{ id: 'item-dialogue-a', type: 'dialogue', characterId: 'character-a', character: '林夏', text: '正好能打开这扇门。' }] },
+            { id: 'item-instance-a', type: 'item', itemId: 'item-key', investigation: { text: '钥匙背面刻着仓库编号。' }, blocks: [{ id: 'item-dialogue-a', type: 'dialogue', characterId: 'character-a', character: '林夏', text: '正好能打开这扇门。' }, { id: 'item-narration-a', type: 'narration', text: '锁芯轻轻转动。' }, { id: 'nested-item-a', type: 'item', itemId: 'item-box', investigation: { text: '钥匙打开了一个木盒。' }, blocks: [{ id: 'nested-choice-a', type: 'choice', title: '是否查看盒底？', options: [{ text: '查看', targetBlockId: '' }] }] }] },
           ] },
         ],
       },
@@ -71,7 +71,11 @@ test('项目索引保持精简并将每个场景保存为独立 JSON', async (te
   const secondScene = JSON.parse(await fs.readFile(path.join(root, ...firstChapter.scenes[1].file.split('/')), 'utf8'));
   assert.equal(secondScene.scene.blocks[1].itemId, 'item-key');
   assert.equal(secondScene.scene.blocks[1].investigation.text, '钥匙背面刻着仓库编号。');
-  assert.equal(secondScene.scene.blocks[1].dialogues[0].text, '正好能打开这扇门。');
+  assert.equal(secondScene.scene.blocks[1].blocks[0].text, '正好能打开这扇门。');
+  assert.equal(secondScene.scene.blocks[1].blocks[1].type, 'narration');
+  assert.equal(secondScene.scene.blocks[1].blocks[2].itemId, 'item-box');
+  assert.equal(secondScene.scene.blocks[1].blocks[2].blocks[0].type, 'choice');
+  assert.equal(Object.hasOwn(itemDocument.items[1], 'blocks'), false);
 
   const opened = await readProjectFile(projectPath);
   assert.equal(opened.storage, STORAGE_FORMAT);
@@ -81,6 +85,7 @@ test('项目索引保持精简并将每个场景保存为独立 JSON', async (te
     ['灯塔'],
   ]);
   assert.equal(opened.data.items[0].coverImageId, 'image-a');
+  assert.equal(opened.data.chapters[0].scenes[1].blocks[1].blocks[2].investigation.text, '钥匙打开了一个木盒。');
 });
 
 test('支线触发方式随场景分卷保存且可完整恢复', async (testContext) => {

@@ -151,9 +151,13 @@
 .item-dialogue-detail-empty { min-height: 190px; display: grid; place-content: center; gap: 5px; color: var(--muted); text-align: center; }
 .item-dialogue-detail-empty b { color: var(--ink); font-size: 14px; }
 .item-dialogue-detail-empty span { font-size: 10px; }
-.item-dialogue-detail-add { position: relative; z-index: 2; display: flex; align-items: center; gap: 7px; justify-self: end; margin: 2px 0 2px auto; padding: 5px; border-radius: 7px; background: color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: 0 5px 18px rgba(64, 54, 48, .08); }
+.item-dialogue-detail-add { position: relative; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; justify-self: end; margin: 2px 0 2px auto; padding: 5px; border-radius: 7px; background: color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: 0 5px 18px rgba(64, 54, 48, .08); }
 .item-dialogue-detail-add select { max-width: 160px; height: 30px; border: 0; border-radius: 5px; padding: 0 26px 0 9px; background: var(--accent-soft); color: var(--ink); outline: 0; font: 10px inherit; }
-.item-dialogue-detail-add button { height: 30px; border: 0; border-radius: 5px; padding: 0 11px; background: var(--accent); color: #fff; cursor: pointer; font: 700 10px inherit; }
+.item-dialogue-detail-add button { height: 30px; border: 0; border-radius: 5px; padding: 0 9px; background: var(--accent); color: #fff; cursor: pointer; font: 700 9px inherit; }
+.item-dialogue-detail-add button:not(:first-of-type) { background: color-mix(in srgb, var(--accent) 84%, var(--ink)); }
+.item-content-detail-card.segment-block { margin-block: 16px !important; }
+.item-content-detail-card.narration { min-height: 54px; }
+.item-content-detail-card.choice-block { min-height: 88px; }
 .item-dialogue-detail-inspector { min-width: 0; min-height: 0; display: grid; grid-template-rows: 38px minmax(0, 1fr); border-left: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, var(--bg)); }
 .item-dialogue-detail-inspector-header { display: flex; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--line); color: var(--ink); font-size: 11px; font-weight: 800; }
 .item-dialogue-detail-inspector-body { min-height: 0; overflow: auto; padding: 2px 13px 24px; }
