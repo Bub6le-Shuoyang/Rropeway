@@ -12,7 +12,7 @@ const {
 
 async function createTemporaryProject(testContext) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'rropeway-storage-'));
-  testContext.after(() => fs.rm(root, { recursive: true, force: true }));
+  testContext.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 6, retryDelay: 50 }));
   return {
     root,
     projectPath: path.join(root, '测试项目.scriptroom'),
@@ -34,7 +34,7 @@ function projectFixture(title = '分卷存储测试') {
           { id: 'scene-a', number: '01', title: '抵达码头', blocks: [{ id: 'dialogue-a', type: 'dialogue', characterId: 'character-a', character: '林夏', text: '船已经靠岸。' }] },
           { id: 'scene-b', number: '02', title: '进入仓库', blocks: [
             { id: 'narration-a', type: 'narration', text: '门轴发出沉闷的响声。' },
-            { id: 'item-instance-a', type: 'item', itemId: 'item-key', investigation: { text: '钥匙背面刻着仓库编号。' }, blocks: [{ id: 'item-dialogue-a', type: 'dialogue', characterId: 'character-a', character: '林夏', text: '正好能打开这扇门。' }, { id: 'item-narration-a', type: 'narration', text: '锁芯轻轻转动。' }, { id: 'nested-item-a', type: 'item', itemId: 'item-box', investigation: { text: '钥匙打开了一个木盒。' }, blocks: [{ id: 'nested-choice-a', type: 'choice', title: '是否查看盒底？', options: [{ text: '查看', targetBlockId: '' }] }] }] },
+            { id: 'item-instance-a', type: 'item', itemId: 'item-key', investigation: { text: '钥匙背面刻着仓库编号。' }, blocks: [{ id: 'item-dialogue-a', type: 'dialogue', characterId: 'character-a', character: '林夏', text: '正好能打开这扇门。' }, { id: 'item-narration-a', type: 'narration', text: '锁芯轻轻转动。' }, { id: 'nested-item-a', type: 'item', itemId: 'item-box', investigation: { text: '钥匙打开了一个木盒。' }, blocks: [{ id: 'nested-choice-a', type: 'choice', title: '是否查看盒底？', options: [{ id: 'nested-option-a', text: '查看', targetBlockId: '' }] }] }] },
           ] },
         ],
       },
@@ -47,6 +47,16 @@ function projectFixture(title = '分卷存储测试') {
   };
 }
 
+function referencePath(root, reference) {
+  return path.join(root, ...reference.file.split('/'));
+}
+
+async function readChapterDocuments(root, manifest) {
+  const chapterIndex = JSON.parse(await fs.readFile(referencePath(root, manifest.files.chapters), 'utf8'));
+  const chapters = await Promise.all(chapterIndex.chapters.map((reference) => fs.readFile(referencePath(root, reference), 'utf8').then(JSON.parse)));
+  return { chapterIndex, chapters };
+}
+
 test('项目索引保持精简并将每个场景保存为独立 JSON', async (testContext) => {
   const { root, projectPath } = await createTemporaryProject(testContext);
   const saved = await writeProjectFile(projectPath, projectFixture());
@@ -57,18 +67,16 @@ test('项目索引保持精简并将每个场景保存为独立 JSON', async (te
   assert.equal(manifest.revision, saved.revision);
   assert.equal(Object.hasOwn(manifest, 'chapters'), false);
 
-  const revisionRoot = path.join(root, ...manifest.root.split('/'));
-  const sceneFiles = await fs.readdir(path.join(revisionRoot, 'scenes'));
-  const chapterFiles = await fs.readdir(path.join(revisionRoot, 'chapters'));
-  assert.equal(sceneFiles.length, 3);
-  assert.equal(chapterFiles.length, 2);
-  const itemDocument = JSON.parse(await fs.readFile(path.join(root, ...manifest.files.items.split('/')), 'utf8'));
+  assert.equal(manifest.version, 3);
+  const { chapterIndex, chapters } = await readChapterDocuments(root, manifest);
+  assert.equal(chapterIndex.chapters.length, 2);
+  assert.equal(chapters.flatMap((chapter) => chapter.scenes).length, 3);
+  const itemDocument = JSON.parse(await fs.readFile(referencePath(root, manifest.files.items), 'utf8'));
   assert.equal(itemDocument.format, 'rropeway-items');
   assert.equal(itemDocument.items[0].name, '仓库钥匙');
   assert.equal(Object.hasOwn(itemDocument.items[0], 'investigation'), false);
-  const chapterDocument = JSON.parse(await fs.readFile(path.join(root, ...manifest.files.chapters.split('/')), 'utf8'));
-  const firstChapter = JSON.parse(await fs.readFile(path.join(root, ...chapterDocument.chapters[0].file.split('/')), 'utf8'));
-  const secondScene = JSON.parse(await fs.readFile(path.join(root, ...firstChapter.scenes[1].file.split('/')), 'utf8'));
+  const firstChapter = chapters[0];
+  const secondScene = JSON.parse(await fs.readFile(referencePath(root, firstChapter.scenes[1]), 'utf8'));
   assert.equal(secondScene.scene.blocks[1].itemId, 'item-key');
   assert.equal(secondScene.scene.blocks[1].investigation.text, '钥匙背面刻着仓库编号。');
   assert.equal(secondScene.scene.blocks[1].blocks[0].text, '正好能打开这扇门。');
@@ -104,10 +112,10 @@ test('支线触发方式随场景分卷保存且可完整恢复', async (testCon
 
   await writeProjectFile(projectPath, project);
   const manifest = JSON.parse(await fs.readFile(projectPath, 'utf8'));
-  const chapterDocument = JSON.parse(await fs.readFile(path.join(root, ...manifest.files.chapters.split('/')), 'utf8'));
-  const firstChapter = JSON.parse(await fs.readFile(path.join(root, ...chapterDocument.chapters[0].file.split('/')), 'utf8'));
+  const { chapters } = await readChapterDocuments(root, manifest);
+  const firstChapter = chapters[0];
   const branchReference = firstChapter.scenes.find((scene) => scene.id === 'branch-hidden-room-1');
-  const branchDocument = JSON.parse(await fs.readFile(path.join(root, ...branchReference.file.split('/')), 'utf8'));
+  const branchDocument = JSON.parse(await fs.readFile(referencePath(root, branchReference), 'utf8'));
   assert.equal(branchDocument.scene.kind, 'branch');
   assert.equal(branchDocument.scene.branchId, 'branch-hidden-room');
   assert.equal(Object.hasOwn(branchDocument.scene, 'branchTrigger'), false);
@@ -121,30 +129,48 @@ test('支线触发方式随场景分卷保存且可完整恢复', async (testCon
   assert.equal(scenes[0].blocks[0].text, '暗门缓慢打开。');
 });
 
-test('保存只保留当前与上一版本并让备份指向可恢复版本', async (testContext) => {
+test('未修改的组件按内容复用，备份仍指向上一索引', async (testContext) => {
   const { root, projectPath } = await createTemporaryProject(testContext);
   const first = await writeProjectFile(projectPath, projectFixture('第一版'));
   const second = await writeProjectFile(projectPath, projectFixture('第二版'));
-
-  const revisionsPath = path.join(root, 'project-data', 'revisions');
-  const revisions = (await fs.readdir(revisionsPath)).sort();
-  assert.deepEqual(revisions.sort(), [first.revision, second.revision].sort());
-
+  const firstManifest = JSON.parse(await fs.readFile(`${projectPath}.backup`, 'utf8'));
+  const secondManifest = JSON.parse(await fs.readFile(projectPath, 'utf8'));
+  const firstChapters = await readChapterDocuments(root, firstManifest);
+  const secondChapters = await readChapterDocuments(root, secondManifest);
+  assert.deepEqual(firstChapters.chapters.flatMap((chapter) => chapter.scenes.map((scene) => scene.hash)), secondChapters.chapters.flatMap((chapter) => chapter.scenes.map((scene) => scene.hash)));
+  await assert.rejects(() => fs.access(path.join(root, 'project-data', 'revisions')));
   const backupManifest = JSON.parse(await fs.readFile(`${projectPath}.backup`, 'utf8'));
   assert.equal(backupManifest.revision, first.revision);
+  assert.equal(secondManifest.revision, second.revision);
   const opened = await readProjectFile(projectPath);
   assert.equal(opened.data.title, '第二版');
+});
+
+test('修改单个场景时只生成该场景及其索引的新组件', async (testContext) => {
+  const { root, projectPath } = await createTemporaryProject(testContext);
+  await writeProjectFile(projectPath, projectFixture('局部保存'));
+  const beforeManifest = JSON.parse(await fs.readFile(projectPath, 'utf8'));
+  const before = await readChapterDocuments(root, beforeManifest);
+  const changed = projectFixture('局部保存');
+  changed.chapters[0].scenes[0].blocks[0].text = '只修改第一个场景。';
+  await writeProjectFile(projectPath, changed);
+  const afterManifest = JSON.parse(await fs.readFile(projectPath, 'utf8'));
+  const after = await readChapterDocuments(root, afterManifest);
+  assert.notEqual(after.chapters[0].scenes[0].hash, before.chapters[0].scenes[0].hash);
+  assert.equal(after.chapters[0].scenes[1].hash, before.chapters[0].scenes[1].hash);
+  assert.equal(after.chapters[1].scenes[0].hash, before.chapters[1].scenes[0].hash);
 });
 
 test('当前场景文件损坏时自动从上一版项目恢复', async (testContext) => {
   const { root, projectPath } = await createTemporaryProject(testContext);
   await writeProjectFile(projectPath, projectFixture('可恢复版本'));
-  await writeProjectFile(projectPath, projectFixture('损坏版本'));
+  const changed = projectFixture('损坏版本');
+  changed.chapters[0].scenes[0].blocks[0].text = '这是一个只存在于当前版本的修改。';
+  await writeProjectFile(projectPath, changed);
 
   const manifest = JSON.parse(await fs.readFile(projectPath, 'utf8'));
-  const chapterIndex = JSON.parse(await fs.readFile(path.join(root, ...manifest.files.chapters.split('/')), 'utf8'));
-  const chapter = JSON.parse(await fs.readFile(path.join(root, ...chapterIndex.chapters[0].file.split('/')), 'utf8'));
-  const scenePath = path.join(root, ...chapter.scenes[0].file.split('/'));
+  const { chapters } = await readChapterDocuments(root, manifest);
+  const scenePath = referencePath(root, chapters[0].scenes[0]);
   await fs.writeFile(scenePath, '{ invalid json', 'utf8');
 
   const opened = await readProjectFile(projectPath);
@@ -168,6 +194,44 @@ test('旧版单文件项目仍可读取并在保存后迁移为分卷格式', as
   assert.equal(legacyBackup.title, '旧项目');
 });
 
+test('split-json-v1 项目可读取并在保存后升级为内容寻址格式', async (testContext) => {
+  const { root, projectPath } = await createTemporaryProject(testContext);
+  const revision = 'legacy-v1-revision';
+  const revisionRoot = path.join(root, 'project-data', 'revisions', revision);
+  const relativeRoot = `project-data/revisions/${revision}`;
+  const project = projectFixture('旧分卷项目');
+  const writeDocument = async (relativePath, format, values) => {
+    const target = path.join(root, ...relativePath.split('/'));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, JSON.stringify({ format, version: 1, revision, ...values }), 'utf8');
+  };
+  await fs.mkdir(revisionRoot, { recursive: true });
+  await Promise.all([
+    writeDocument(`${relativeRoot}/project.json`, 'rropeway-project-metadata', { title: project.title, description: project.description, updatedAt: new Date().toISOString() }),
+    writeDocument(`${relativeRoot}/characters.json`, 'rropeway-characters', { characters: project.characters }),
+    writeDocument(`${relativeRoot}/items.json`, 'rropeway-items', { items: project.items }),
+    writeDocument(`${relativeRoot}/assets.json`, 'rropeway-assets', { assets: project.assets }),
+    writeDocument(`${relativeRoot}/relationship-graph.json`, 'rropeway-relationship-graph', { relationshipGraph: {} }),
+    writeDocument(`${relativeRoot}/scene-flow.json`, 'rropeway-scene-flow', { sceneFlow: {} }),
+    writeDocument(`${relativeRoot}/scenes/scene-a.json`, 'rropeway-scene', { scene: project.chapters[0].scenes[0] }),
+    writeDocument(`${relativeRoot}/chapters/chapter-a.json`, 'rropeway-chapter', { id: 'chapter-a', title: '第一章', status: '草稿', branches: [], scenes: [{ id: 'scene-a', file: `${relativeRoot}/scenes/scene-a.json` }] }),
+    writeDocument(`${relativeRoot}/chapters.json`, 'rropeway-chapter-index', { chapters: [{ id: 'chapter-a', file: `${relativeRoot}/chapters/chapter-a.json` }] }),
+  ]);
+  await fs.writeFile(projectPath, JSON.stringify({
+    format: MANIFEST_FORMAT, version: 2, storage: 'split-json-v1', revision, root: relativeRoot,
+    files: {
+      project: `${relativeRoot}/project.json`, characters: `${relativeRoot}/characters.json`, items: `${relativeRoot}/items.json`, assets: `${relativeRoot}/assets.json`,
+      relationshipGraph: `${relativeRoot}/relationship-graph.json`, sceneFlow: `${relativeRoot}/scene-flow.json`, chapters: `${relativeRoot}/chapters.json`,
+    },
+  }), 'utf8');
+
+  const opened = await readProjectFile(projectPath);
+  assert.equal(opened.storage, 'split-json-v1');
+  assert.equal(opened.data.chapters[0].scenes[0].title, '抵达码头');
+  await writeProjectFile(projectPath, opened.data);
+  assert.equal(JSON.parse(await fs.readFile(projectPath, 'utf8')).storage, STORAGE_FORMAT);
+});
+
 test('项目索引不能读取项目文件夹之外的文件', async (testContext) => {
   const { root, projectPath } = await createTemporaryProject(testContext);
   const outsidePath = path.join(path.dirname(root), `outside-${Date.now()}.json`);
@@ -175,16 +239,16 @@ test('项目索引不能读取项目文件夹之外的文件', async (testContex
   await fs.writeFile(outsidePath, '{}', 'utf8');
   await fs.writeFile(projectPath, JSON.stringify({
     format: MANIFEST_FORMAT,
-    version: 2,
+    version: 3,
     storage: STORAGE_FORMAT,
     revision: 'unsafe',
     files: {
-      project: `../${path.basename(outsidePath)}`,
-      characters: 'project-data/characters.json',
-      assets: 'project-data/assets.json',
-      relationshipGraph: 'project-data/relationship.json',
-      sceneFlow: 'project-data/flow.json',
-      chapters: 'project-data/chapters.json',
+      project: { file: `../${path.basename(outsidePath)}`, hash: 'a'.repeat(64) },
+      characters: { file: 'project-data/characters.json', hash: 'a'.repeat(64) },
+      assets: { file: 'project-data/assets.json', hash: 'a'.repeat(64) },
+      relationshipGraph: { file: 'project-data/relationship.json', hash: 'a'.repeat(64) },
+      sceneFlow: { file: 'project-data/flow.json', hash: 'a'.repeat(64) },
+      chapters: { file: 'project-data/chapters.json', hash: 'a'.repeat(64) },
     },
   }), 'utf8');
 

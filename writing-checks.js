@@ -17,6 +17,132 @@
     });
   }
 
+  function emptyWritingMetrics() {
+    return {
+      blocks: 0,
+      words: 0,
+      dialogues: 0,
+      narrations: 0,
+      choices: 0,
+      choiceOptions: 0,
+      segments: 0,
+      items: 0,
+      images: 0,
+      criticalNodes: 0,
+      characterIds: new Set()
+    };
+  }
+
+  function countWritingCharacters(value) {
+    return plainText(value).replace(/\s/g, '').length;
+  }
+
+  function addBlockToWritingMetrics(metrics, block) {
+    if (!block || typeof block !== 'object') return;
+    metrics.blocks += 1;
+    if (block.type === 'dialogue') {
+      metrics.dialogues += 1;
+      metrics.words += countWritingCharacters(block.textHtml || block.text);
+      const characterKey = String(block.characterId || block.character || '').trim();
+      if (characterKey) metrics.characterIds.add(characterKey);
+      if ((block.statusTags || []).includes('关键节点')) metrics.criticalNodes += 1;
+    } else if (block.type === 'narration') {
+      metrics.narrations += 1;
+      metrics.words += countWritingCharacters(block.textHtml || block.text);
+    } else if (block.type === 'choice') {
+      metrics.choices += 1;
+      metrics.words += countWritingCharacters(block.title || block.text);
+      (block.options || []).forEach((option) => {
+        const value = typeof option === 'string' ? { text: option } : option || {};
+        metrics.choiceOptions += 1;
+        metrics.words += countWritingCharacters(value.text);
+      });
+    } else if (block.type === 'segment') {
+      metrics.segments += 1;
+      metrics.words += countWritingCharacters(block.title || block.text);
+      metrics.images += Array.isArray(block.images) ? block.images.length : 0;
+    } else if (block.type === 'item') {
+      metrics.items += 1;
+      metrics.words += countWritingCharacters(block.investigation?.text || block.investigationText);
+      (block.blocks || []).forEach((child) => addBlockToWritingMetrics(metrics, child));
+    }
+  }
+
+  function finalizeWritingMetrics(metrics) {
+    return {
+      blocks: metrics.blocks,
+      words: metrics.words,
+      dialogues: metrics.dialogues,
+      narrations: metrics.narrations,
+      choices: metrics.choices,
+      choiceOptions: metrics.choiceOptions,
+      segments: metrics.segments,
+      items: metrics.items,
+      images: metrics.images,
+      criticalNodes: metrics.criticalNodes,
+      characters: metrics.characterIds.size
+    };
+  }
+
+  function mergeWritingMetrics(target, source) {
+    ['blocks', 'words', 'dialogues', 'narrations', 'choices', 'choiceOptions', 'segments', 'items', 'images', 'criticalNodes'].forEach((key) => { target[key] += source[key]; });
+    source.characterIds.forEach((characterId) => target.characterIds.add(characterId));
+  }
+
+  function collectWritingStatistics(project, issues = []) {
+    const totalMetrics = emptyWritingMetrics();
+    const issueCountsByScene = new Map();
+    (issues || []).forEach((issue) => {
+      const location = issue?.location || {};
+      if (location.view !== 'editor' || !Number.isInteger(location.chapterIndex) || !Number.isInteger(location.sceneIndex)) return;
+      const key = `${location.chapterIndex}:${location.sceneIndex}`;
+      if (!issueCountsByScene.has(key)) issueCountsByScene.set(key, { total: 0, errors: 0, warnings: 0 });
+      const counts = issueCountsByScene.get(key);
+      counts.total += 1;
+      if (issue.severity === 'error') counts.errors += 1;
+      else counts.warnings += 1;
+    });
+    const chapters = (project?.chapters || []).map((chapter, chapterIndex) => {
+      const chapterMetrics = emptyWritingMetrics();
+      const scenes = (chapter.scenes || []).map((scene, sceneIndex) => {
+        const sceneMetrics = emptyWritingMetrics();
+        if (scene.background) sceneMetrics.images += 1;
+        (scene.blocks || []).forEach((block) => addBlockToWritingMetrics(sceneMetrics, block));
+        mergeWritingMetrics(chapterMetrics, sceneMetrics);
+        mergeWritingMetrics(totalMetrics, sceneMetrics);
+        return {
+          id: scene.id,
+          title: scene.title || `场景 ${sceneIndex + 1}`,
+          number: scene.number || '',
+          chapterIndex,
+          sceneIndex,
+          branchId: scene.branchId || '',
+          isBranch: Boolean(scene.branchId),
+          metrics: finalizeWritingMetrics(sceneMetrics),
+          issues: issueCountsByScene.get(`${chapterIndex}:${sceneIndex}`) || { total: 0, errors: 0, warnings: 0 }
+        };
+      });
+      return {
+        id: chapter.id,
+        title: chapter.title || `第 ${chapterIndex + 1} 章`,
+        chapterIndex,
+        sceneCount: scenes.length,
+        metrics: finalizeWritingMetrics(chapterMetrics),
+        scenes
+      };
+    });
+    const issueTotals = (issues || []).reduce((counts, issue) => {
+      counts.total += 1;
+      if (issue?.severity === 'error') counts.errors += 1;
+      else counts.warnings += 1;
+      return counts;
+    }, { total: 0, errors: 0, warnings: 0 });
+    return {
+      totals: { ...finalizeWritingMetrics(totalMetrics), chapters: chapters.length, scenes: chapters.reduce((count, chapter) => count + chapter.sceneCount, 0), issues: issueTotals },
+      chapters
+    };
+  }
+
   function collectWritingIssues(project) {
     const issues = [];
     const chapters = Array.isArray(project?.chapters) ? project.chapters : [];
@@ -113,5 +239,5 @@
     return { issues, assetReferences };
   }
 
-  return { LONG_DIALOGUE_LENGTH, collectWritingIssues, plainText };
+  return { LONG_DIALOGUE_LENGTH, collectWritingIssues, collectWritingStatistics, plainText };
 }));
