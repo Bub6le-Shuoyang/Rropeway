@@ -8,7 +8,7 @@ const DEFAULT_PROJECT = {
   description: '',
   chapters: [{
     id: 'chapter-1', title: '第一章', status: '草稿',
-    scenes: [{ id: 'scene-1', number: '01', title: '未命名场景', blocks: [] }],
+    scenes: [{ id: 'scene-1', number: '01', title: '未命名场景', designNote: '', blocks: [] }],
     branches: []
   }],
   characters: [],
@@ -102,6 +102,7 @@ function normalizeScene(scene, index) {
     kind,
     branchId: kind === 'branch' ? String(value.branchId || value.branchGroupId || '') : '',
     background: value.background ? String(value.background) : '',
+    designNote: String(value.designNote ?? value.designNotes ?? ''),
     blocks: Array.isArray(value.blocks) ? value.blocks.map(normalizeBlock) : []
   };
 }

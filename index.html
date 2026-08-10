@@ -63,6 +63,21 @@
               <textarea id="branchTriggerInput" rows="2" maxlength="500" placeholder="记录玩家如何触发这条支线，例如：调查旧书架并持有黄铜钥匙"></textarea>
               <button class="branch-flow-toggle" id="branchFlowToggle" type="button">加入流程图</button>
             </section>
+            <section class="scene-design-note" id="sceneDesignNote" aria-label="场景设计备注">
+              <button class="scene-design-note-toggle" id="sceneDesignNoteToggle" type="button" aria-expanded="false" aria-controls="sceneDesignNoteBody">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5h9l3 3v12H6z"/><path d="M9 10h6M9 13.5h6M9 17h4"/></svg>
+                <span><b>设计备注</b><small id="sceneDesignNoteStatus">未填写 · 点击展开</small></span>
+                <span class="scene-design-note-chevron" aria-hidden="true">⌄</span>
+              </button>
+              <div class="scene-design-note-body" id="sceneDesignNoteBody" hidden>
+                <textarea id="sceneDesignNoteInput" rows="4" maxlength="5000" placeholder="记录本场景的创作目标、情绪节奏、伏笔、演出要求等。设计备注不会进入剧情预览。"></textarea>
+                <span>仅供创作使用，不参与预览和对白字数统计</span>
+              </div>
+            </section>
+            <section class="scene-dialogue-filter" id="sceneDialogueFilter" aria-label="按角色筛选当前场景对白">
+              <div class="scene-dialogue-filter-label"><b>角色对白</b><span id="sceneDialogueFilterSummary">显示全部对白</span></div>
+              <div class="scene-dialogue-filter-options" id="sceneDialogueFilterOptions"></div>
+            </section>
             <div class="scene-tabs"></div>
             <div class="script-canvas">
               <div class="canvas-toolbar"><span>对白流</span><div class="toolbar-spacer"></div><button class="toolbar-icon" title="撤销">↶</button><button class="toolbar-icon" title="重做">↷</button></div>
@@ -169,6 +184,7 @@
     <script src="./item-format.js"></script>
     <script src="./story-flow.js"></script>
     <script src="./writing-checks.js"></script>
+    <script src="./scene-tools.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

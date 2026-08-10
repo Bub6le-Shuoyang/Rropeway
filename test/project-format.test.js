@@ -146,6 +146,17 @@ test('项目会保存跨章节的场景预览流程', () => {
   assert.deepEqual(project.sceneFlow.transitions, [{ sourceSceneId: 'scene-c', targetSceneId: 'scene-a' }, { sourceSceneId: 'scene-a', targetSceneId: 'scene-b' }]);
 });
 
+test('场景设计备注会随场景独立保存并兼容旧字段', () => {
+  const project = normalizeProject({ chapters: [{ scenes: [
+    { id: 'scene-a', designNote: '本场景需要保持压迫感。', blocks: [] },
+    { id: 'scene-b', designNotes: '旧字段备注也需要迁移。', blocks: [] },
+    { id: 'scene-c', designNote: '', designNotes: '已被清空的旧备注', blocks: [] }
+  ] }] });
+  assert.equal(project.chapters[0].scenes[0].designNote, '本场景需要保持压迫感。');
+  assert.equal(project.chapters[0].scenes[1].designNote, '旧字段备注也需要迁移。');
+  assert.equal(project.chapters[0].scenes[2].designNote, '');
+});
+
 test('支线会保存触发方式且默认排除在流程图之外', () => {
   const project = normalizeProject({
     chapters: [{ scenes: [

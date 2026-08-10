@@ -1,6 +1,7 @@
 const desktopApi = window.scriptroom;
 const storyFlowTools = window.RropewayStoryFlow;
 const writingCheckTools = window.RropewayWritingChecks;
+const sceneTools = window.RropewaySceneTools;
 const skinSettingsTools = window.RropewaySkinSettings;
 const itemFormatTools = window.RropewayItemFormat;
 desktopApi?.getVersion?.().then((version) => { const label = document.getElementById('appVersion'); if (label) label.textContent = `v${version}`; }).catch(() => {});
@@ -51,6 +52,8 @@ const normalizedAvatarSourceCache = new Map();
 const projectAssetSourceCache = new Map();
 const expandedChapterIds = new Set();
 const expandedBranchIds = new Set();
+const expandedSceneDesignNoteIds = new Set();
+const sceneDialogueFilterById = new Map();
 let draggedChapterId = null;
 let draggedSceneInfo = null;
 let ignoreTreeClickUntil = 0;
@@ -1193,6 +1196,86 @@ function renderBranchTriggerPanel(scene) {
   toggle.classList.toggle('included', included);
 }
 
+function renderSceneDesignNote(scene) {
+  const panel = document.getElementById('sceneDesignNote');
+  const toggle = document.getElementById('sceneDesignNoteToggle');
+  const body = document.getElementById('sceneDesignNoteBody');
+  const input = document.getElementById('sceneDesignNoteInput');
+  const status = document.getElementById('sceneDesignNoteStatus');
+  if (!panel || !toggle || !body || !input || !status) return;
+  const note = String(scene.designNote || '');
+  const expanded = expandedSceneDesignNoteIds.has(scene.id);
+  panel.classList.toggle('expanded', expanded);
+  toggle.setAttribute('aria-expanded', String(expanded));
+  body.hidden = !expanded;
+  input.value = note;
+  const noteLength = note.replace(/\s/g, '').length;
+  status.textContent = noteLength ? `${noteLength} 字${expanded ? '' : ' · 点击展开'}` : `未填写${expanded ? '' : ' · 点击展开'}`;
+}
+
+function activeSceneDialogueFilter(scene) {
+  const filters = sceneTools?.collectSceneDialogueFilters(scene, desktopState.data?.characters || []) || [{ key: 'all', label: '全部对白', count: 0 }];
+  let filterKey = sceneDialogueFilterById.get(scene.id) || 'all';
+  if (!filters.some((filter) => filter.key === filterKey)) {
+    filterKey = 'all';
+    sceneDialogueFilterById.delete(scene.id);
+  }
+  return { filters, filterKey };
+}
+
+function renderSceneDialogueFilter(scene) {
+  const container = document.getElementById('sceneDialogueFilterOptions');
+  const summary = document.getElementById('sceneDialogueFilterSummary');
+  if (!container || !summary || !sceneTools) return;
+  const { filters, filterKey } = activeSceneDialogueFilter(scene);
+  container.replaceChildren();
+  filters.forEach((filter) => {
+    const button = addChild(container, 'button', `scene-dialogue-filter-option${filter.key === filterKey ? ' active' : ''}${filter.key === 'unassigned' ? ' unassigned' : ''}`);
+    button.type = 'button'; button.dataset.filterKey = filter.key; button.title = `只显示${filter.label}`;
+    addChild(button, 'span', '', filter.label); addChild(button, 'small', '', String(filter.count));
+    button.addEventListener('click', () => {
+      sceneDialogueFilterById.set(scene.id, filter.key);
+      if (filter.key !== 'all') {
+        const nextIndex = (scene.blocks || []).findIndex((block) => sceneTools.blockMatchesDialogueFilter(block, filter.key, desktopState.data?.characters || []));
+        if (nextIndex >= 0) selectedBlockIndex = nextIndex;
+      }
+      renderScene(); renderInspector();
+    });
+  });
+  const selected = filters.find((filter) => filter.key === filterKey) || filters[0];
+  summary.textContent = filterKey === 'all' ? `显示全部 ${selected.count} 条对白` : `仅显示 ${selected.label} · ${selected.count} 条`;
+}
+
+function applySceneDialogueFilter(scene) {
+  const canvas = document.querySelector('.script-canvas');
+  if (!canvas || !sceneTools) return;
+  canvas.querySelector('.scene-dialogue-filter-empty')?.remove();
+  const { filters, filterKey } = activeSceneDialogueFilter(scene);
+  const characters = desktopState.data?.characters || [];
+  const activeFilter = filterKey !== 'all';
+  const visibleIndices = [];
+  if (activeFilter) (scene.blocks || []).forEach((block, index) => {
+    if (sceneTools.blockMatchesDialogueFilter(block, filterKey, characters)) visibleIndices.push(index);
+  });
+  if (activeFilter && visibleIndices.length && !visibleIndices.includes(selectedBlockIndex)) selectedBlockIndex = visibleIndices[0];
+  let visibleCount = 0;
+  canvas.classList.toggle('dialogue-filter-active', activeFilter);
+  canvas.querySelectorAll('.script-block').forEach((element) => {
+    const blockIndex = Number(element.dataset.blockIndex);
+    const visible = !activeFilter || sceneTools.blockMatchesDialogueFilter(scene.blocks?.[blockIndex], filterKey, characters);
+    element.classList.toggle('dialogue-filter-hidden', !visible);
+    element.classList.toggle('selected', blockIndex === selectedBlockIndex);
+    if (visible) visibleCount += 1;
+  });
+  if (activeFilter && !visibleCount) {
+    const empty = node('div', 'scene-dialogue-filter-empty');
+    const selected = filters.find((filter) => filter.key === filterKey);
+    addChild(empty, 'b', '', '当前筛选没有可显示的对白');
+    addChild(empty, 'span', '', selected ? `角色：${selected.label}` : '请切换其他角色');
+    canvas.insertBefore(empty, document.getElementById('flowAddActions'));
+  }
+}
+
 function renderScene() {
   clearSegmentSlideshows();
   const scene = currentScene(); if (!scene) return;
@@ -1202,11 +1285,15 @@ function renderScene() {
   const canvas = document.querySelector('.script-canvas'); const addButton = document.getElementById('flowAddActions');
   selectedBlockIndex = Math.min(selectedBlockIndex, Math.max(0, (scene.blocks || []).length - 1));
   canvas.querySelectorAll('.script-block').forEach((block) => block.remove());
+  canvas.querySelector('.scene-dialogue-filter-empty')?.remove();
   (scene.blocks || []).forEach((block, index) => canvas.insertBefore(createBlockElement(block, index), addButton));
-  positionFlowAddActions();
   document.getElementById('sceneTitle').textContent = scene.title;
   document.getElementById('sceneSummary').textContent = scene.blocks?.length ? `${isBranchScene(scene) ? '支线 · ' : ''}${scene.blocks.length} 个内容块` : (isBranchScene(scene) ? '空白支线' : '空白场景');
   renderBranchTriggerPanel(scene);
+  renderSceneDesignNote(scene);
+  renderSceneDialogueFilter(scene);
+  applySceneDialogueFilter(scene);
+  positionFlowAddActions();
   const breadcrumbTitle = document.getElementById('breadcrumbSceneTitle');
   if (breadcrumbTitle) { breadcrumbTitle.classList.remove('editing'); breadcrumbTitle.textContent = `第 ${activeChapterIndex + 1} 章 · ${scene.title}`; }
   requestAnimationFrame(() => { if (scrollPanel && lastRenderedSceneId === scene.id) scrollPanel.scrollTop = previousScrollTop; });
@@ -1278,7 +1365,7 @@ function addScene() {
   if (!chapter) return;
   const sceneNumber = chapter.scenes.filter((scene) => !isBranchScene(scene)).length + 1;
   const insertionIndex = chapter.scenes.findIndex(isBranchScene);
-  const scene = { id: `scene-${Date.now()}`, number: String(sceneNumber).padStart(2, '0'), title: `未命名场景 ${sceneNumber}`, kind: 'scene', branchId: '', background: '', blocks: [] };
+  const scene = { id: `scene-${Date.now()}`, number: String(sceneNumber).padStart(2, '0'), title: `未命名场景 ${sceneNumber}`, kind: 'scene', branchId: '', background: '', designNote: '', blocks: [] };
   if (insertionIndex < 0) chapter.scenes.push(scene); else chapter.scenes.splice(insertionIndex, 0, scene);
   activeSceneIndex = chapter.scenes.indexOf(scene);
   selectedBlockIndex = 0;
@@ -1293,7 +1380,7 @@ function addBranch(chapterIndex = activeChapterIndex) {
   const branchNumber = chapter.branches.length + 1;
   const branchId = `branch-${Date.now()}`;
   chapter.branches.push({ id: branchId, title: `未命名支线 ${branchNumber}`, trigger: '', includeInFlow: false });
-  const scene = { id: `branch-scene-${Date.now()}`, number: '01', title: '场景 1', kind: 'branch', branchId, background: '', blocks: [] };
+  const scene = { id: `branch-scene-${Date.now()}`, number: '01', title: '场景 1', kind: 'branch', branchId, background: '', designNote: '', blocks: [] };
   chapter.scenes.push(scene);
   expandedChapterIds.add(chapter.id);
   expandedBranchIds.add(branchId);
@@ -1312,7 +1399,7 @@ function addBranchScene(chapterIndex, branchId) {
   if (!chapter || !branch) return;
   const existingScenes = branchScenes(chapter, branchId);
   const sceneNumber = existingScenes.length + 1;
-  const scene = { id: `branch-scene-${Date.now()}`, number: String(sceneNumber).padStart(2, '0'), title: `场景 ${sceneNumber}`, kind: 'branch', branchId, background: '', blocks: [] };
+  const scene = { id: `branch-scene-${Date.now()}`, number: String(sceneNumber).padStart(2, '0'), title: `场景 ${sceneNumber}`, kind: 'branch', branchId, background: '', designNote: '', blocks: [] };
   const lastIndex = Math.max(...existingScenes.map((item) => chapter.scenes.indexOf(item)));
   chapter.scenes.splice(Number.isFinite(lastIndex) ? lastIndex + 1 : chapter.scenes.length, 0, scene);
   expandedChapterIds.add(chapter.id); expandedBranchIds.add(branchId);
@@ -1346,6 +1433,21 @@ document.getElementById('branchTriggerInput')?.addEventListener('input', (event)
   const branch = branchGroupForScene(scene);
   if (!branch) return;
   branch.trigger = event.target.value;
+  markDirty();
+});
+document.getElementById('sceneDesignNoteToggle')?.addEventListener('click', () => {
+  const scene = currentScene(); if (!scene) return;
+  if (expandedSceneDesignNoteIds.has(scene.id)) expandedSceneDesignNoteIds.delete(scene.id);
+  else expandedSceneDesignNoteIds.add(scene.id);
+  renderSceneDesignNote(scene);
+  if (expandedSceneDesignNoteIds.has(scene.id)) requestAnimationFrame(() => document.getElementById('sceneDesignNoteInput')?.focus({ preventScroll: true }));
+});
+document.getElementById('sceneDesignNoteInput')?.addEventListener('input', (event) => {
+  const scene = currentScene(); if (!scene) return;
+  scene.designNote = event.target.value;
+  const status = document.getElementById('sceneDesignNoteStatus');
+  const noteLength = scene.designNote.replace(/\s/g, '').length;
+  if (status) status.textContent = noteLength ? `${noteLength} 字` : '未填写';
   markDirty();
 });
 document.getElementById('branchFlowToggle')?.addEventListener('click', () => {
@@ -2849,7 +2951,7 @@ document.addEventListener('input', (event) => {
 });
 document.querySelector('[title="撤销"]')?.addEventListener('click', undoProjectChange);
 document.querySelector('[title="重做"]')?.addEventListener('click', redoProjectChange);
-document.getElementById('addChapter')?.addEventListener('click', () => { const chapters = desktopState.data.chapters; const chapterNumber = chapters.length + 1; const chapter = { id: `chapter-${Date.now()}`, title: `未命名章节 ${chapterNumber}`, status: '草稿', scenes: [{ id: `scene-${Date.now()}`, number: '01', title: '未命名场景', kind: 'scene', branchId: '', background: '', blocks: [] }], branches: [] }; chapters.push(chapter); expandedChapterIds.add(chapter.id); activeChapterIndex = chapters.length - 1; activeSceneIndex = 0; renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]').click(); markDirty(); showToast('已添加新章节'); });
+document.getElementById('addChapter')?.addEventListener('click', () => { const chapters = desktopState.data.chapters; const chapterNumber = chapters.length + 1; const chapter = { id: `chapter-${Date.now()}`, title: `未命名章节 ${chapterNumber}`, status: '草稿', scenes: [{ id: `scene-${Date.now()}`, number: '01', title: '未命名场景', kind: 'scene', branchId: '', background: '', designNote: '', blocks: [] }], branches: [] }; chapters.push(chapter); expandedChapterIds.add(chapter.id); activeChapterIndex = chapters.length - 1; activeSceneIndex = 0; renderChapters(); renderSceneTabs(); renderScene(); document.querySelector('[data-view="editor"]').click(); markDirty(); showToast('已添加新章节'); });
 function setWindowProjectMenuOpen(open) {
   const menu = document.getElementById('windowProjectMenu'); const button = document.getElementById('projectMenuButton');
   if (!menu || !button) return;
