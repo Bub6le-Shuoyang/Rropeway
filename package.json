@@ -2,6 +2,7 @@
   "name": "rropeway-desktop",
   "version": "0.16.0",
   "description": "离线游戏对话脚本编辑器",
+  "license": "GPL-3.0-only",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
